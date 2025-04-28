@@ -1,0 +1,18 @@
+/*@tailwind base;*/
+/*@tailwind components;*/
+/*@tailwind utilities;*/
+
+/*!* 커스텀 기본 스타일 추가 *!*/
+/*@layer base {*/
+/*    body {*/
+/*        font-family: 'Inter', sans-serif;*/
+/*        color: theme('colors.amber.500'); !* Tailwind 색상 사용 *!*/
+/*    }*/
+/*}*/
+
+/*!* 다크 모드 지원 예시 *!*/
+/*@layer utilities {*/
+/*    .dark .text-primary {*/
+/*        color: theme('colors.blue.500');*/
+/*    }*/
+/*}*/
