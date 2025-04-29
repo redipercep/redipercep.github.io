@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { MemoComment } from '../types/memo';
 import ReactMarkdown from 'react-markdown';
 import { FaEdit, FaTrash } from 'react-icons/fa';
@@ -10,9 +10,14 @@ interface CommentItemProps {
     onDelete: (commentId: number) => void; // 댓글 삭제 처리
 }
 
+
 const CommentItem: React.FC<CommentItemProps> = ({ comment, onEdit, onDelete }) => {
     const [isEditing, setIsEditing] = useState(false);
     const [editedContent, setEditedContent] = useState(comment.content);
+
+    useEffect(() => {
+        setEditedContent(comment.content);
+    }, [comment.content]);
 
     // 댓글 내용 수정 시 상태 업데이트
     const handleEditChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -86,7 +91,7 @@ const CommentItem: React.FC<CommentItemProps> = ({ comment, onEdit, onDelete }) 
                     </div>
                 </div>
             ) : (
-                <div className="mt-2 text-sm text-gray-300">
+                <div className="mt-2 text-sm text-gray-300 md-content">
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{comment.content}</ReactMarkdown>
                 </div>
             )}

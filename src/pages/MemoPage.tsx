@@ -61,6 +61,7 @@ const MemoPage: React.FC = () => {
     // 댓글 추가
     const handleAddComment = async (memoId: number, content: string) => {
         const newComment: MemoComment = {
+            id: Date.now(),
             memoId,
             content,
             createdAt: new Date().toISOString(),
@@ -93,6 +94,26 @@ const MemoPage: React.FC = () => {
         });
 
         setMemos(updatedMemos); // 상태 업데이트
+    };
+
+    // 댓글 수정
+    const handleEditComment = (updatedComment: MemoComment, memoId: number) => {
+        setMemos(prevMemos =>
+            prevMemos.map(memo => {
+                if (memo.id !== memoId) return memo;
+
+                const updatedComments = memo.comments.map(comment =>
+                    comment.id === updatedComment.id
+                        ? { ...updatedComment } // 새 객체로 교체
+                        : comment
+                );
+
+                return {
+                    ...memo,
+                    comments: updatedComments, // 새 배열로 교체
+                };
+            })
+        );
     };
 
     const handleImport = (importedMemos: Memo[]) => {
@@ -162,6 +183,7 @@ const MemoPage: React.FC = () => {
                             onEdit={handleEditMemo}
                             onAddComment={handleAddComment}
                             onDeleteComment={handleDeleteComment}
+                            onEditComment={handleEditComment}
                         />
                     ))
                 ) : (

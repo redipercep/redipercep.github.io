@@ -12,3 +12,19 @@ code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
 }
+
+.md-content a {
+  color: skyblue;
+}
+.md-content a:hover {
+  color: deepskyblue;
+}
+.md-content blockquote {
+  padding-left: 1rem;
+}
+.md-content h1 { font-size: 2rem; }
+.md-content h2 { font-size: 1.5rem; }
+.md-content h3 { font-size: 1.17rem; }
+.md-content h4 { font-size: 1.0rem; }
+.md-content h5 { font-size: .83rem; }
+.md-content h6 { font-size: .67rem; }

@@ -4,6 +4,7 @@ import { FaEdit, FaChevronDown, FaChevronUp } from 'react-icons/fa';
 import CommentItem from './CommentItem';
 import ReactMarkdown from "react-markdown";
 import remarkGfm from 'remark-gfm';
+import commentItem from "./CommentItem";
 
 interface MemoItemProps {
     memo: Memo;
@@ -11,6 +12,7 @@ interface MemoItemProps {
     onEdit: (memo: Memo) => void;
     onAddComment: (memoId: number, content: string) => void;  // 댓글 추가를 부모에서 처리
     onDeleteComment: (commentId: number, memoId: number) => void;
+    onEditComment: (updatedComment: MemoComment, memoId: number) => void;
 }
 
 const MemoItem: React.FC<MemoItemProps> = ({ memo, onDelete, onEdit, onAddComment, onDeleteComment }) => {
@@ -130,7 +132,7 @@ const MemoItem: React.FC<MemoItemProps> = ({ memo, onDelete, onEdit, onAddCommen
 
             {/* 메모 내용 (전체) */}
             {isOpen && (
-                <div className="mt-4 text-gray-200">
+                <div className="mt-4 text-gray-200 md-content">
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {memo.content}
                     </ReactMarkdown>
