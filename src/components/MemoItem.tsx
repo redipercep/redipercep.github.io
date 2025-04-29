@@ -16,7 +16,8 @@ interface MemoItemProps {
 }
 
 const MemoItem: React.FC<MemoItemProps> = ({ memo, onDelete, onEdit, onAddComment, onDeleteComment }) => {
-    const [isOpen, setIsOpen] = useState(false); // 메모 내용과 댓글을 펼칠지 말지 결정
+    const [isOpen, setIsOpen] = useState(false); // 메모 전체 열기/닫기
+    const [isCommentsOpen, setIsCommentsOpen] = useState(false); // 댓글 전용 열기/닫기
     const [newComment, setNewComment] = useState('');
     const [isEditing, setIsEditing] = useState(false); // 수정 폼 표시 여부
     const [newTitle, setNewTitle] = useState(memo.title);
@@ -25,6 +26,10 @@ const MemoItem: React.FC<MemoItemProps> = ({ memo, onDelete, onEdit, onAddCommen
 
     const toggleContent = () => {
         setIsOpen(prev => !prev); // 열리고 닫히는 상태를 전환
+    };
+
+    const toggleComments = () => {
+        setIsCommentsOpen(prev => !prev);
     };
 
     const handleDeleteMemo = () => {
@@ -139,12 +144,22 @@ const MemoItem: React.FC<MemoItemProps> = ({ memo, onDelete, onEdit, onAddCommen
                 </div>
             )}
 
-            {/* 댓글 표시 */}
-            {isOpen && memo.comments?.length > 0 && (
-                <div className="mt-4">
-                    <h4 className="text-base text-gray-300">댓글</h4>
-                    <div className="mt-2">
-                        {memo.comments?.map((comment) => (
+            {/* 댓글 토글 버튼 */}
+            {isOpen && (
+                <button
+                    onClick={toggleComments}
+                    className="mt-4 text-sm text-blue-400 hover:underline"
+                >
+                    {isCommentsOpen ? '댓글 닫기 ▲' : `댓글 ${memo.comments.length}개 보기 ▼`}
+                </button>
+            )}
+
+            {/* 댓글 목록 */}
+            {isOpen && isCommentsOpen && memo.comments?.length > 0 && (
+                <div className="mt-2">
+                    {[...memo.comments]
+                        .sort((a, b) => (b.id ?? 0) - (a.id ?? 0))
+                        .map((comment) => (
                             <CommentItem
                                 key={comment.id}
                                 comment={comment}
@@ -152,12 +167,11 @@ const MemoItem: React.FC<MemoItemProps> = ({ memo, onDelete, onEdit, onAddCommen
                                 onDelete={handleDeleteComment}
                             />
                         ))}
-                    </div>
                 </div>
             )}
 
-            {/* 댓글 추가 폼 */}
-            {isOpen && (
+            {/* 댓글 입력 */}
+            {isOpen && isCommentsOpen && (
                 <div className="mt-4">
                     <textarea
                         placeholder="댓글을 작성하세요"
@@ -166,7 +180,7 @@ const MemoItem: React.FC<MemoItemProps> = ({ memo, onDelete, onEdit, onAddCommen
                         onChange={(e) => setNewComment(e.target.value)}
                     />
                     <button
-                        onClick={handleAddComment}  // 댓글 추가 시 handleAddComment 호출
+                        onClick={handleAddComment}
                         className="mt-2 px-2 text-xs bg-green-950 text-gray-400 rounded-md hover:bg-green-800"
                     >
                         댓글 추가

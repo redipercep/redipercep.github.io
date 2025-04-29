@@ -36,7 +36,14 @@ export async function deleteMemo(id: number) {
 // 4. 메모 조회 함수 (전체 메모)
 export async function getMemos() {
     try {
-        return await db.memos.toArray();
+        const memos = await db.memos.toArray();
+        const comments = await db.comments.toArray();
+
+        return memos.map(memo => ({
+            ...memo,
+            comments: comments.filter(c => c.memoId === memo.id)
+        }));
+
     } catch (error) {
         console.error('메모 조회 실패:', error);
         return [];
@@ -56,9 +63,10 @@ export async function getMemo(id: number) {
 export async function addComment(memoId: number, comment: MemoComment) {
     try {
         const id = await db.comments.add({ ...comment, memoId });
-        return id;
+        return { ...comment, id };
     } catch (error) {
         console.error('댓글 추가 실패:', error);
+        return { ...comment };
     }
 }
 

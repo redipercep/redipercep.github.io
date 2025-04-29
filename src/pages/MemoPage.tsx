@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, {useEffect, useState} from 'react';
 import MemoItem from '../components/MemoItem';
-import { Memo, MemoComment } from '../types/memo';
-import { FaPlus } from 'react-icons/fa';
-import { getMemos, addMemo, updateMemo, deleteMemo, addComment, deleteComment } from '../db/memoDB';
+import {Memo, MemoComment} from '../types/memo';
+import {FaPlus} from 'react-icons/fa';
+import {addComment, addMemo, deleteComment, deleteMemo, getMemos, updateMemo} from '../db/memoDB';
 import MemoHeader from "../components/MemoHeader"; // DB 메서드
 
 const MemoPage: React.FC = () => {
@@ -17,7 +17,11 @@ const MemoPage: React.FC = () => {
     useEffect(() => {
         const fetchMemos = async () => {
             const memos = await getMemos();
-            setMemos(memos);
+            const safeMemos = memos.map(memo => ({
+                ...memo,
+                comments: memo.comments ?? [] // comments가 undefined면 []로 초기화
+            }));
+            setMemos(safeMemos);
         };
 
         fetchMemos();
@@ -61,19 +65,22 @@ const MemoPage: React.FC = () => {
     // 댓글 추가
     const handleAddComment = async (memoId: number, content: string) => {
         const newComment: MemoComment = {
-            id: Date.now(),
             memoId,
             content,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
         };
 
-        await addComment(memoId, newComment); // DB에 댓글 추가
+        // 💡 DB에 저장하면서 id 포함된 comment 반환받기
+        const savedComment = await addComment(memoId, newComment);
 
         // 메모 상태 업데이트
         const updatedMemos = memos.map(memo => {
             if (memo.id === memoId) {
-                return { ...memo, comments: [newComment, ...memo.comments] };
+                return {
+                    ...memo,
+                    comments: [savedComment, ...memo.comments],
+                };
             }
             return memo;
         });
@@ -175,7 +182,9 @@ const MemoPage: React.FC = () => {
             {/* 메모 목록 */}
             <div className="mt-6">
                 {memos.length > 0 ? (
-                    memos.map((memo) => (
+                    [...memos]
+                        .sort((a, b) => (b.id ?? 0) - (a.id ?? 0)) // ID가 클수록 먼저 오게 정렬
+                        .map((memo) => (
                         <MemoItem
                             key={memo.id}
                             memo={memo}
