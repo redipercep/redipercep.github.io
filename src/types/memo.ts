@@ -9,6 +9,7 @@ export interface Memo {
     createdAt: string;         // 작성일 (ISO 8601 형식)
     updatedAt: string;         // 수정일 (ISO 8601 형식)
     hashtags: string[];        // 해시태그 (배열)
+    isDeleted: boolean;        // 삭제 여부
     comments: MemoComment[];
 }
 
@@ -19,4 +20,5 @@ export interface MemoComment {
     content: string;           // 댓글 내용
     createdAt: string;         // 댓글 작성일 (ISO 8601 형식)
     updatedAt: string;         // 댓글 수정일 (ISO 8601 형식)
+    isDeleted: boolean;        // 삭제 여부
 }

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Memo, MemoComment } from '../types/memo';
-import { FaEdit, FaChevronDown, FaChevronUp } from 'react-icons/fa';
+import { FaEdit } from 'react-icons/fa';
 import CommentItem from './CommentItem';
 import ReactMarkdown from "react-markdown";
 import remarkGfm from 'remark-gfm';
@@ -23,15 +23,29 @@ const MemoItem: React.FC<MemoItemProps> = ({ memo, onDelete, onEdit, onAddCommen
     const [newTitle, setNewTitle] = useState(memo.title);
     const [newContent, setNewContent] = useState(memo.content);
     const [newCategory, setNewCategory] = useState(memo.category);
+    const [visibleCommentCount, setVisibleCommentCount] = useState(5);
 
+    // 메모 열기/닫기 토글
     const toggleContent = () => {
-        setIsOpen(prev => !prev); // 열리고 닫히는 상태를 전환
+        setIsOpen(prev => !prev);
     };
 
+    // 댓글 열기/닫기 토글
     const toggleComments = () => {
         setIsCommentsOpen(prev => !prev);
     };
 
+    // 댓글 더 불러오기
+    const handleLoadMoreComments = () => {
+        setVisibleCommentCount((prev) => prev + 5);
+    }
+
+    // 댓글 간단히
+    const handleLoadLessComments = () => {
+        setVisibleCommentCount(prev => 5);
+    }
+
+    // 메모 삭제
     const handleDeleteMemo = () => {
         onDelete(memo.id!);
     };
@@ -64,6 +78,7 @@ const MemoItem: React.FC<MemoItemProps> = ({ memo, onDelete, onEdit, onAddCommen
         }
     };
 
+    // 댓글 수정
     const handleEditComment = (updatedComment: MemoComment) => {
         // 댓글 수정 시, 메모의 댓글을 갱신
         const updatedComments = memo.comments?.map(comment =>
@@ -156,9 +171,26 @@ const MemoItem: React.FC<MemoItemProps> = ({ memo, onDelete, onEdit, onAddCommen
 
             {/* 댓글 목록 */}
             {isOpen && isCommentsOpen && memo.comments?.length > 0 && (
-                <div className="mt-2">
+                <div className="mt-2 ml-2">
+                    {visibleCommentCount < memo.comments.length && (
+                        <button
+                            onClick={handleLoadMoreComments}
+                            className="mb-2 text-xs text-gray-700 hover:text-blue-400"
+                        >
+                            댓글 더보기 ▲
+                        </button>
+                    )}
+                    {visibleCommentCount >= memo.comments.length && memo.comments.length > 5 && (
+                        <button
+                            onClick={handleLoadLessComments}
+                            className="mb-2 text-xs text-gray-700 hover:text-blue-400"
+                        >
+                            댓글 간단히 ▼
+                        </button>
+                    )}
                     {[...memo.comments]
-                        .sort((a, b) => (b.id ?? 0) - (a.id ?? 0))
+                        .sort((a, b) => (a.id ?? 0) - (b.id ?? 0))
+                        .slice(memo.comments.length - visibleCommentCount < 0 ? 0 : memo.comments.length - visibleCommentCount, memo.comments.length)
                         .map((comment) => (
                             <CommentItem
                                 key={comment.id}

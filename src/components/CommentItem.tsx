@@ -52,7 +52,7 @@ const CommentItem: React.FC<CommentItemProps> = ({ comment, onEdit, onDelete }) 
     };
 
     return (
-        <div className="p-4 mb-4 bg-gray-800 rounded-lg">
+        <div className="px-4 py-2 mb-2 bg-gray-800 rounded-lg">
             {/* 댓글 작성자 및 작성일 */}
             <div className="flex justify-between items-center text-sm text-gray-400">
                 <span>{new Date(comment.createdAt).toLocaleString()}</span>

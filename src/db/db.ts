@@ -9,8 +9,8 @@ class MemoAppDatabase extends Dexie {
     constructor() {
         super('MemoAppDatabase');
         this.version(1).stores({
-            memos: '++id, title, category, content, createdAt, updatedAt, hashtags',  // memos 테이블
-            comments: '++id, memoId, content, createdAt, updatedAt'  // comments 테이블
+            memos: '++id, title, category, content, createdAt, updatedAt, hashtags, isDeleted, comments',  // memos 테이블
+            comments: '++id, memoId, content, createdAt, updatedAt, isDeleted'  // comments 테이블
         });
     }
 }

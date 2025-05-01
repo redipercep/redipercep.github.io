@@ -2,7 +2,7 @@ import React, {useEffect, useState} from 'react';
 import MemoItem from '../components/MemoItem';
 import {Memo, MemoComment} from '../types/memo';
 import {FaPlus} from 'react-icons/fa';
-import {addComment, addMemo, deleteComment, deleteMemo, getMemos, updateMemo} from '../db/memoDB';
+import {addComment, addMemo, deleteComment, deleteMemo, getMemo, getMemos, updateMemo} from '../db/memoDB';
 import MemoHeader from "../components/MemoHeader"; // DB 메서드
 
 const MemoPage: React.FC = () => {
@@ -13,8 +13,18 @@ const MemoPage: React.FC = () => {
     const [newMemoHashtags, setNewMemoHashtags] = useState<string[]>([]);
     const [isFormOpen, setIsFormOpen] = useState(false); // 폼 열고 닫기 위한 상태 추가
 
-    // 메모 불러오기
+    /**
+     * 컴포넌트 랜더링 후 동작
+     * 1. 데이터를 불러올 때 (API 호출 등) - 컴포넌트가 처음 렌더링될 때 서버에서 데이터를 가져오고 싶을 때.
+     * 2. 구독(setup)/정리(cleanup)이 필요할 때
+     * 예: WebSocket 연결, 이벤트 리스너 등록, 타이머 설정 등.
+     * 3. 컴포넌트가 업데이트될 때 어떤 작업을 하고 싶을 때
+     * 예: 특정 state나 props가 바뀌면 그에 따라 다른 작업을 하고 싶을 때.
+     * 4. 로컬 저장소에 데이터 저장/불러오기 등 사이드 이펙트 작업
+     * 예: localStorage, IndexedDB 연동
+     */
     useEffect(() => {
+        // 메모 불러오기
         const fetchMemos = async () => {
             const memos = await getMemos();
             const safeMemos = memos.map(memo => ({
@@ -24,6 +34,7 @@ const MemoPage: React.FC = () => {
             setMemos(safeMemos);
         };
 
+        // 동작할 목록을 변수로 관리
         fetchMemos();
     }, []);
 
@@ -38,6 +49,7 @@ const MemoPage: React.FC = () => {
                 updatedAt: new Date().toISOString(),
                 hashtags: newMemoHashtags,
                 comments: [],
+                isDeleted: false
             };
 
             await addMemo(newMemo); // DB에 메모 추가
@@ -69,6 +81,7 @@ const MemoPage: React.FC = () => {
             content,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
+            isDeleted: false
         };
 
         // 💡 DB에 저장하면서 id 포함된 comment 반환받기
@@ -84,6 +97,12 @@ const MemoPage: React.FC = () => {
             }
             return memo;
         });
+
+        // 메모 db 갱신
+        const updatedMemo = updatedMemos.filter((memo) => memo.id === memoId);
+        if (updatedMemo.length > 0) {
+            await updateMemo( updatedMemo[0] );
+        }
 
         setMemos(updatedMemos); // 상태 업데이트
     };

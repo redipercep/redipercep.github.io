@@ -30,6 +30,7 @@ function MemoForm({ onMemoAdded }: MemoFormProps) {
             createdAt: now,
             updatedAt: now,
             comments: [],
+            isDeleted: false
         };
 
         await addMemo(newMemo);
