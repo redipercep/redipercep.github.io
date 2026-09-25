@@ -17,12 +17,16 @@ const MemoImg: React.FC<{src?: string; alt?: string}> = ({src, alt}) => {
 };
 
 const components: Components = {
-    h1: ({node: _n, ...p}) => <h1 className="mb-2 mt-4 text-xl font-bold text-gray-50 first:mt-0" {...p} />,
-    h2: ({node: _n, ...p}) => <h2 className="mb-2 mt-4 text-lg font-bold text-gray-50 first:mt-0" {...p} />,
-    h3: ({node: _n, ...p}) => <h3 className="mb-1 mt-3 font-semibold text-gray-100 first:mt-0" {...p} />,
-    h4: ({node: _n, ...p}) => <h4 className="mb-1 mt-3 font-semibold text-gray-100" {...p} />,
+    h1: ({node: _n, children, ...p}) => <h1 className="mb-2 mt-4 text-xl font-bold text-gray-50 first:mt-0" {...p}>{children}</h1>,
+    h2: ({node: _n, children, ...p}) => <h2 className="mb-2 mt-4 text-lg font-bold text-gray-50 first:mt-0" {...p}>{children}</h2>,
+    h3: ({node: _n, children, ...p}) => <h3 className="mb-1 mt-3 font-semibold text-gray-100 first:mt-0" {...p}>{children}</h3>,
+    h4: ({node: _n, children, ...p}) => <h4 className="mb-1 mt-3 font-semibold text-gray-100" {...p}>{children}</h4>,
     p: ({node: _n, ...p}) => <p className="mb-2 leading-relaxed" {...p} />,
-    a: ({node: _n, ...p}) => <a className="text-sky-400 underline underline-offset-2" target="_blank" rel="noopener noreferrer" {...p} />,
+    a: ({node: _n, children, ...p}) => (
+        <a className="text-sky-400 underline underline-offset-2" target="_blank" rel="noopener noreferrer" {...p}>
+            {children}
+        </a>
+    ),
     ul: ({node: _n, className, ...p}) => (
         <ul className={className?.includes('contains-task-list') ? 'mb-2 space-y-1' : 'mb-2 list-disc space-y-1 pl-5'} {...p} />
     ),
