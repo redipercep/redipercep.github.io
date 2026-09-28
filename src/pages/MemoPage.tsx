@@ -6,6 +6,7 @@ import MemoEditor from '../components/MemoEditor';
 import {deleteMemoWithImages, deleteImages, getAllMemos, importData, saveMemo} from '../db/memoDB';
 import type {Memo, MemoImage, SortDir, SortKey} from '../types/memo';
 import {exportBackup, readBackup} from '../utils/backup';
+import {newId} from '../utils/format';
 import {clearImageUrlCache, releaseImageUrls} from '../utils/image';
 import {categoryIcon, PRESETS} from '../utils/presets';
 
@@ -35,7 +36,7 @@ function usePref<T extends string>(key: string, fallback: T) {
 /** 공백으로 나눈 모든 단어가 포함되어야 일치. #으로 시작하면 해시태그만 검색 */
 function matches(memo: Memo, query: string) {
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-    const haystack = `${memo.title}\n${memo.content}\n${memo.category}`.toLowerCase();
+    const haystack = [memo.title, memo.content, memo.category, ...memo.comments.map(c => c.content)].join('\n').toLowerCase();
     const tags = memo.hashtags.map(t => t.toLowerCase());
     return terms.every(term =>
         term.startsWith('#')
@@ -135,6 +136,37 @@ const MemoPage: React.FC = () => {
         releaseImageUrls(memo.imageIds);
         await reload();
         showToast('삭제했습니다');
+    };
+
+    /** 화면을 먼저 갱신하고 DB에 저장 */
+    const persist = async (next: Memo) => {
+        setMemos(list => list.map(m => (m.id === next.id ? next : m)));
+        try {
+            await saveMemo(next);
+        } catch {
+            showToast('저장하지 못했습니다');
+            await reload();
+        }
+    };
+
+    // 댓글도 기록 활동이므로 메모의 수정일을 갱신한다 (다른 기기와 합칠 때 최신본 판단에도 쓰임)
+    const addComment = (memo: Memo, content: string) => {
+        const now = new Date().toISOString();
+        return persist({...memo, updatedAt: now, comments: [...memo.comments, {id: newId(), content, createdAt: now, updatedAt: now}]});
+    };
+
+    const editComment = (memo: Memo, commentId: string, content: string) => {
+        const now = new Date().toISOString();
+        return persist({
+            ...memo,
+            updatedAt: now,
+            comments: memo.comments.map(c => (c.id === commentId ? {...c, content, updatedAt: now} : c)),
+        });
+    };
+
+    const removeComment = (memo: Memo, commentId: string) => {
+        if (!window.confirm('댓글을 삭제할까요?')) return Promise.resolve();
+        return persist({...memo, updatedAt: new Date().toISOString(), comments: memo.comments.filter(c => c.id !== commentId)});
     };
 
     const toggleFavorite = async (memo: Memo) => {
@@ -238,7 +270,7 @@ const MemoPage: React.FC = () => {
                             type="search"
                             value={query}
                             onChange={e => setQuery(e.target.value)}
-                            placeholder="제목, 내용, #태그 검색"
+                            placeholder="제목, 내용, 댓글, #태그 검색"
                             enterKeyHint="search"
                             className="min-w-0 flex-1 bg-transparent py-2 text-base outline-none placeholder:text-gray-500"
                         />
@@ -320,6 +352,9 @@ const MemoPage: React.FC = () => {
                                 onEdit={m => setEditor({memo: m})}
                                 onDelete={handleDelete}
                                 onToggleFavorite={toggleFavorite}
+                                onAddComment={addComment}
+                                onEditComment={editComment}
+                                onDeleteComment={removeComment}
                                 onTagClick={t => setActiveTag(activeTag === t ? null : t)}
                                 onCategoryClick={c => setCategory(c)}
                             />
