@@ -1,9 +1,10 @@
 import React, {useEffect, useState} from 'react';
-import {FiEdit2, FiStar, FiTrash2} from 'react-icons/fi';
+import {FiEdit2, FiMessageCircle, FiStar, FiTrash2} from 'react-icons/fi';
 import type {Memo} from '../types/memo';
 import {formatDate} from '../utils/format';
 import {categoryChip, categoryIcon} from '../utils/presets';
 import MarkdownView from './MarkdownView';
+import MemoComments from './MemoComments';
 
 interface Props {
     memo: Memo;
@@ -14,10 +15,17 @@ interface Props {
     onToggleFavorite: (memo: Memo) => void;
     onTagClick: (tag: string) => void;
     onCategoryClick: (category: string) => void;
+    onAddComment: (memo: Memo, content: string) => Promise<void>;
+    onEditComment: (memo: Memo, commentId: string, content: string) => Promise<void>;
+    onDeleteComment: (memo: Memo, commentId: string) => Promise<void>;
 }
 
-const MemoCard: React.FC<Props> = ({memo, highlight, activeTag, onEdit, onDelete, onToggleFavorite, onTagClick, onCategoryClick}) => {
+const MemoCard: React.FC<Props> = ({
+    memo, highlight, activeTag, onEdit, onDelete, onToggleFavorite, onTagClick, onCategoryClick,
+    onAddComment, onEditComment, onDeleteComment,
+}) => {
     const [expanded, setExpanded] = useState(false);
+    const [showComments, setShowComments] = useState(false);
     const isLong = memo.content.length > 220 || memo.content.split('\n').length > 8 || memo.imageIds.length > 0;
     const collapsed = isLong && !expanded;
     const edited = memo.updatedAt.slice(0, 16) !== memo.createdAt.slice(0, 16);
@@ -86,6 +94,13 @@ const MemoCard: React.FC<Props> = ({memo, highlight, activeTag, onEdit, onDelete
                     <div>작성 {formatDate(memo.createdAt)}</div>
                     {edited && <div>수정 {formatDate(memo.updatedAt)}</div>}
                 </div>
+                <button
+                    onClick={() => setShowComments(v => !v)}
+                    aria-expanded={showComments}
+                    className={`flex items-center gap-1 rounded-full px-2.5 py-1.5 text-sm ${showComments ? 'bg-gray-700 text-gray-100' : 'text-gray-400 hover:bg-gray-700'}`}
+                >
+                    <FiMessageCircle size={16} /> 댓글 {memo.comments.length || ''}
+                </button>
                 <button onClick={() => onEdit(memo)} aria-label="수정" className="rounded-full p-2 text-gray-400 hover:bg-gray-700">
                     <FiEdit2 size={17} />
                 </button>
@@ -93,6 +108,15 @@ const MemoCard: React.FC<Props> = ({memo, highlight, activeTag, onEdit, onDelete
                     <FiTrash2 size={17} />
                 </button>
             </footer>
+
+            {showComments && (
+                <MemoComments
+                    comments={memo.comments}
+                    onAdd={content => onAddComment(memo, content)}
+                    onEdit={(id, content) => onEditComment(memo, id, content)}
+                    onDelete={id => onDeleteComment(memo, id)}
+                />
+            )}
         </article>
     );
 };

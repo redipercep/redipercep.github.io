@@ -199,6 +199,7 @@ const MemoEditor: React.FC<Props> = ({memo, preset, categories, allTags, onSave,
             hashtags: pendingTag && !tags.includes(pendingTag) ? [...tags, pendingTag] : tags,
             imageIds,
             isFavorite,
+            comments: memo?.comments ?? [],
             createdAt: memo?.createdAt ?? now,
             updatedAt: now,
         };
