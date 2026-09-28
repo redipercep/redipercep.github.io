@@ -7,7 +7,15 @@ export interface Memo {
     hashtags: string[];
     imageIds: string[];     // 본문에서 참조하는 이미지 ID 목록
     isFavorite: boolean;
+    comments: MemoComment[]; // 오래된 순
     createdAt: string;      // ISO 문자열
+    updatedAt: string;
+}
+
+export interface MemoComment {
+    id: string;
+    content: string;        // 마크다운
+    createdAt: string;
     updatedAt: string;
 }
 
