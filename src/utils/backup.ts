@@ -1,6 +1,6 @@
 import {getAllImages, getAllMemos} from '../db/memoDB';
 import type {BackupFile, Memo, MemoImage} from '../types/memo';
-import {fileStamp, formatDate, newId} from './format';
+import {fileStamp, newId} from './format';
 import {downloadBlob, extractImageIds} from './image';
 
 function blobToDataUrl(blob: Blob) {
@@ -49,15 +49,18 @@ const str = (v: unknown, fallback = '') => (typeof v === 'string' ? v : fallback
 /** 이전 버전(댓글 포함) 형식도 받아들이도록 정규화 */
 function normalizeMemo(r: Raw): Memo {
     const now = new Date().toISOString();
-    let content = str(r.content);
-
-    // 예전 댓글은 본문 아래로 옮겨 둔다
-    if (Array.isArray(r.comments)) {
-        const lines = (r.comments as Raw[])
-            .filter(c => c && !c.isDeleted && str(c.content))
-            .map(c => `- ${str(c.content)} _(${formatDate(str(c.createdAt))})_`);
-        if (lines.length) content += `\n\n---\n### 댓글\n${lines.join('\n')}`;
-    }
+    const content = str(r.content);
+    const comments = Array.isArray(r.comments)
+        ? (r.comments as Raw[])
+              .filter(c => c && !c.isDeleted && str(c.content))
+              .map(c => ({
+                  id: typeof c.id === 'string' ? c.id : newId(), // 예전 형식은 숫자 id
+                  content: str(c.content),
+                  createdAt: str(c.createdAt, now),
+                  updatedAt: str(c.updatedAt, str(c.createdAt, now)),
+              }))
+              .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        : [];
 
     return {
         id: typeof r.id === 'number' ? r.id : undefined,
@@ -70,6 +73,7 @@ function normalizeMemo(r: Raw): Memo {
             : [],
         imageIds: extractImageIds(content),
         isFavorite: r.isFavorite === true,
+        comments,
         createdAt: str(r.createdAt, now),
         updatedAt: str(r.updatedAt, str(r.createdAt, now)),
     };
