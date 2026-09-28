@@ -66,7 +66,8 @@ function forPut(memo: Memo): Memo {
 }
 
 // ─── 메모 ──────────────────────────────────────────
-export const getAllMemos = () => run<Memo[]>(MEMOS, 'readonly', s => s.getAll());
+export const getAllMemos = () =>
+    run<Memo[]>(MEMOS, 'readonly', s => s.getAll()).then(list => list.map(m => ({...m, comments: m.comments ?? []})));
 
 export const saveMemo = (memo: Memo) =>
     run<IDBValidKey>(MEMOS, 'readwrite', s => s.put(forPut(memo))).then(key => key as number);
