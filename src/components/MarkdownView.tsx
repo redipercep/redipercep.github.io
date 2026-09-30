@@ -62,4 +62,15 @@ const MarkdownView: React.FC<{content: string}> = ({content}) => (
     </div>
 );
 
+// 한 줄짜리 내용(할일 항목 등)을 문단 없이 표시
+const inlineComponents: Components = {...components, p: ({children}) => <>{children}</>};
+
+export const InlineMarkdown: React.FC<{content: string}> = React.memo(({content}) => (
+    <span className="break-words">
+        <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={urlTransform} components={inlineComponents}>
+            {content}
+        </ReactMarkdown>
+    </span>
+));
+
 export default React.memo(MarkdownView);
