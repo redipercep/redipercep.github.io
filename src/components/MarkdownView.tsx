@@ -1,4 +1,5 @@
-import React from 'react';
+import React, {createContext, useContext, useState} from 'react';
+import {FiChevronRight} from 'react-icons/fi';
 import ReactMarkdown, {defaultUrlTransform, type Components} from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {IMG_PROTOCOL, useImageUrl} from '../utils/image';
@@ -16,6 +17,55 @@ const MemoImg: React.FC<{src?: string; alt?: string}> = ({src, alt}) => {
     return <img src={url} alt={alt ?? ''} loading="lazy" className="my-2 block h-auto max-w-full rounded-lg" />;
 };
 
+// ─── 접고 펼 수 있는 목록 ─────────────────────────
+type ListKind = 'ul' | 'ol' | 'task';
+const ListContext = createContext<ListKind>('ul');
+
+type HastNode = {type?: string; tagName?: string; children?: HastNode[]};
+const isList = (n: HastNode) => n.type === 'element' && (n.tagName === 'ul' || n.tagName === 'ol');
+
+/** 하위 목록이 있는 항목의 하위 항목 수 (없으면 0) */
+const subItemCount = (node?: HastNode) => {
+    const sub = node?.children?.find(isList);
+    return sub?.children?.filter(c => c.tagName === 'li').length ?? 0;
+};
+
+const ListItem: React.FC<{node?: HastNode; className?: string; children?: React.ReactNode}> = ({node, className, children}) => {
+    const kind = useContext(ListContext);
+    const [collapsed, setCollapsed] = useState(false);
+    const isTask = className?.includes('task-list-item');
+    const count = subItemCount(node);
+
+    if (!count) return <li className={isTask ? 'list-none' : ''}>{children}</li>;
+
+    const toggle = (
+        <button
+            type="button"
+            onClick={() => setCollapsed(v => !v)}
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? '하위 항목 펼치기' : '하위 항목 접기'}
+            className={`rounded p-0.5 text-gray-400 hover:bg-gray-700 hover:text-gray-200 ${
+                // 글머리 기호(•) 자리에 버튼을 두고, 번호·체크 목록은 내용 앞에 둔다
+                kind === 'ul' && !isTask ? 'absolute -left-6 top-0.5' : '-ml-1 mr-1 inline-flex align-[-3px]'
+            }`}
+        >
+            <FiChevronRight size={16} className={`transition-transform ${collapsed ? '' : 'rotate-90'}`} />
+        </button>
+    );
+
+    return (
+        <li className={`${kind === 'ul' || isTask ? 'relative list-none' : ''} ${collapsed ? '[&>ol]:hidden [&>ul]:hidden' : ''}`}>
+            {toggle}
+            {children}
+            {collapsed && (
+                <button type="button" onClick={() => setCollapsed(false)} className="ml-1.5 rounded-full bg-gray-700 px-2 text-xs text-gray-300">
+                    +{count}
+                </button>
+            )}
+        </li>
+    );
+};
+
 const components: Components = {
     h1: ({node: _n, children, ...p}) => <h1 className="mb-2 mt-4 text-xl font-bold text-gray-50 first:mt-0" {...p}>{children}</h1>,
     h2: ({node: _n, children, ...p}) => <h2 className="mb-2 mt-4 text-lg font-bold text-gray-50 first:mt-0" {...p}>{children}</h2>,
@@ -27,11 +77,20 @@ const components: Components = {
             {children}
         </a>
     ),
-    ul: ({node: _n, className, ...p}) => (
-        <ul className={className?.includes('contains-task-list') ? 'mb-2 space-y-1' : 'mb-2 list-disc space-y-1 pl-5'} {...p} />
+    ul: ({node: _n, className, ...p}) => {
+        const task = className?.includes('contains-task-list');
+        return (
+            <ListContext.Provider value={task ? 'task' : 'ul'}>
+                <ul className={task ? 'mb-2 space-y-1 [&_ul]:mb-0 [&_ul]:mt-1 [&_ul]:pl-6' : 'mb-2 list-disc space-y-1 pl-5 [&_ul]:mb-0 [&_ul]:mt-1'} {...p} />
+            </ListContext.Provider>
+        );
+    },
+    ol: ({node: _n, ...p}) => (
+        <ListContext.Provider value="ol">
+            <ol className="mb-2 list-decimal space-y-1 pl-5 [&_ol]:mb-0 [&_ol]:mt-1" {...p} />
+        </ListContext.Provider>
     ),
-    ol: ({node: _n, ...p}) => <ol className="mb-2 list-decimal space-y-1 pl-5" {...p} />,
-    li: ({node: _n, className, ...p}) => <li className={className?.includes('task-list-item') ? 'list-none' : ''} {...p} />,
+    li: ({node, className, children}) => <ListItem node={node as HastNode} className={className}>{children}</ListItem>,
     input: ({node: _n, ...p}) =>
         p.type === 'checkbox'
             ? <input {...p} className="mr-2 h-4 w-4 translate-y-0.5 accent-emerald-500" />

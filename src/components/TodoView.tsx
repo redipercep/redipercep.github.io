@@ -1,6 +1,6 @@
 import React, {useMemo, useState} from 'react';
 import type {IconType} from 'react-icons';
-import {FiCheckCircle, FiCircle, FiPauseCircle, FiPlayCircle, FiX} from 'react-icons/fi';
+import {FiCheckCircle, FiChevronDown, FiCircle, FiPauseCircle, FiPlayCircle, FiX} from 'react-icons/fi';
 import {
     changeStatus, parseTodo, setTaskDates, shortStamp, STATUS_LABEL, STATUS_ORDER,
     type Task, type TaskStatus, todayStr,
@@ -39,8 +39,12 @@ const TaskMeta: React.FC<{task: Task; today: string}> = ({task, today}) => {
     );
 };
 
+const allDescendants = (t: Task): Task[] => t.children.flatMap(c => [c, ...allDescendants(c)]).filter(c => c.text);
+
 const TaskRow: React.FC<{task: Task; today: string; onOpen?: (t: Task) => void}> = ({task, today, onOpen}) => {
+    const [collapsed, setCollapsed] = useState(false);
     if (!task.text && !task.children.length) return null;
+    const subs = task.children.length ? allDescendants(task) : [];
     const {icon: Icon, color} = STATUS_STYLE[task.status];
     const textCls =
         task.status === 'done' ? 'text-gray-500 line-through decoration-gray-600'
@@ -70,8 +74,22 @@ const TaskRow: React.FC<{task: Task; today: string; onOpen?: (t: Task) => void}>
                     ))}
                     <TaskMeta task={task} today={today} />
                 </div>
+                {subs.length > 0 && (
+                    <button
+                        type="button"
+                        onClick={() => setCollapsed(v => !v)}
+                        aria-expanded={!collapsed}
+                        aria-label={collapsed ? '하위 항목 펼치기' : '하위 항목 접기'}
+                        className={`-my-1 -mr-1 flex shrink-0 items-center gap-0.5 rounded-full px-2 py-1 text-xs hover:bg-gray-700 ${
+                            collapsed ? 'bg-gray-700/70 text-gray-300' : 'text-gray-500'
+                        }`}
+                    >
+                        {collapsed && <span>{subs.filter(s => s.status === 'done').length}/{subs.length}</span>}
+                        <FiChevronDown size={16} className={`transition-transform ${collapsed ? '-rotate-90' : ''}`} />
+                    </button>
+                )}
             </div>
-            {task.children.length > 0 && (
+            {task.children.length > 0 && !collapsed && (
                 <ul className="ml-2.5 border-l border-gray-700 pl-3">
                     {task.children.map(c => (
                         <TaskRow key={c.line} task={c} today={today} onOpen={onOpen} />
