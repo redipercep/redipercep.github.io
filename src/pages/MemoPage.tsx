@@ -4,14 +4,22 @@ import ImageGallery from '../components/ImageGallery';
 import MemoCard from '../components/MemoCard';
 import MemoEditor from '../components/MemoEditor';
 import {deleteMemoWithImages, deleteImages, getAllMemos, importData, saveMemo} from '../db/memoDB';
-import type {Memo, MemoImage, SortDir, SortKey} from '../types/memo';
+import type {Memo, MemoImage, MemoKind, SortDir, SortKey} from '../types/memo';
 import {exportBackup, readBackup} from '../utils/backup';
-import {newId} from '../utils/format';
+import {copyText, newId} from '../utils/format';
 import {clearImageUrlCache, releaseImageUrls} from '../utils/image';
-import {categoryIcon, PRESETS} from '../utils/presets';
+import {categoryIcon, DAILY, presetsFor} from '../utils/presets';
+import {localDate, todayStr, toReportText} from '../utils/todo';
 
-type Tab = 'memos' | 'images';
-type EditorState = {memo: Memo | null; preset?: string} | null;
+type Tab = 'memos' | 'todos' | 'images';
+type EditorState = {memo: Memo | null; kind: MemoKind; preset?: string} | null;
+
+const TABS: {id: Tab; label: string}[] = [
+    {id: 'memos', label: '메모'},
+    {id: 'todos', label: '할일'},
+    {id: 'images', label: '이미지'},
+];
+const tabKind = (tab: Tab): MemoKind => (tab === 'todos' ? 'todo' : 'memo');
 
 const SORT_LABELS: Record<SortKey, string> = {updatedAt: '수정일', createdAt: '작성일', title: '제목'};
 
@@ -82,11 +90,23 @@ const MemoPage: React.FC = () => {
     };
 
     // ─── 파생 데이터 ────────────────────────────────
-    const categories = useMemo(() => {
+    // 메모/할일 탭은 해당 종류만, 이미지 탭은 전체
+    const scoped = useMemo(() => (tab === 'images' ? memos : memos.filter(m => m.kind === tabKind(tab))), [memos, tab]);
+
+    const countCategories = (list: Memo[]) => {
         const count = new Map<string, number>();
-        memos.forEach(m => m.category && count.set(m.category, (count.get(m.category) ?? 0) + 1));
+        list.forEach(m => m.category && count.set(m.category, (count.get(m.category) ?? 0) + 1));
         return [...count.entries()].sort((a, b) => b[1] - a[1]).map(([name, n]) => ({name, n}));
-    }, [memos]);
+    };
+    const categories = useMemo(() => countCategories(scoped), [scoped]);
+
+    const latestDaily = useMemo(
+        () =>
+            memos
+                .filter(m => m.kind === 'todo' && m.category === DAILY)
+                .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null,
+        [memos],
+    );
 
     const allTags = useMemo(() => {
         const count = new Map<string, number>();
@@ -95,7 +115,7 @@ const MemoPage: React.FC = () => {
     }, [memos]);
 
     const visible = useMemo(() => {
-        const list = memos.filter(
+        const list = scoped.filter(
             m =>
                 (!category || m.category === category) &&
                 (!favoritesOnly || m.isFavorite) &&
@@ -106,7 +126,7 @@ const MemoPage: React.FC = () => {
             const cmp = sortKey === 'title' ? a.title.localeCompare(b.title, 'ko') : a[sortKey].localeCompare(b[sortKey]);
             return sortDir === 'asc' ? cmp : -cmp;
         });
-    }, [memos, category, favoritesOnly, activeTag, query, sortKey, sortDir]);
+    }, [scoped, category, favoritesOnly, activeTag, query, sortKey, sortDir]);
 
     const hasFilter = !!(category || favoritesOnly || activeTag || query.trim());
 
@@ -169,6 +189,31 @@ const MemoPage: React.FC = () => {
         return persist({...memo, updatedAt: new Date().toISOString(), comments: memo.comments.filter(c => c.id !== commentId)});
     };
 
+    const updateContent = (memo: Memo, content: string) => persist({...memo, content, updatedAt: new Date().toISOString()});
+
+    const copyReport = async (memo: Memo) => {
+        const ok = await copyText(toReportText(memo.title, memo.content));
+        showToast(ok ? '보고용 텍스트를 복사했습니다' : '복사하지 못했습니다');
+    };
+
+    const changeTab = (t: Tab) => {
+        setTab(t);
+        setCategory(null); // 카테고리는 탭마다 다르므로 초기화
+        setFabOpen(false);
+    };
+
+    const openNew = (kind: MemoKind, preset?: string) => {
+        setFabOpen(false);
+        if (kind === 'todo' && preset === DAILY && latestDaily && localDate(latestDaily.createdAt) === todayStr()) {
+            if (!window.confirm(`오늘 일일업무가 이미 있습니다.\n"${latestDaily.title}"\n\n새로 만들까요? (취소하면 기존 항목으로 이동)`)) {
+                changeTab('todos');
+                setFocusId(latestDaily.id ?? null);
+                return;
+            }
+        }
+        setEditor({memo: null, kind, preset});
+    };
+
     const toggleFavorite = async (memo: Memo) => {
         // 즐겨찾기는 내용 수정이 아니므로 수정일을 바꾸지 않는다
         const next = {...memo, isFavorite: !memo.isFavorite};
@@ -226,15 +271,16 @@ const MemoPage: React.FC = () => {
             <header className="sticky top-0 z-30 border-b border-gray-800 bg-gray-900/95 pt-[env(safe-area-inset-top)] backdrop-blur">
                 <div className="mx-auto max-w-3xl space-y-2 px-4 py-2">
                     <div className="flex items-center gap-2">
-                        <h1 className="text-xl font-bold text-gray-50">메모</h1>
-                        <div className="ml-2 flex flex-1 rounded-lg bg-gray-800 p-0.5 text-sm">
-                            {(['memos', 'images'] as Tab[]).map(t => (
+                        <h1 className="sr-only">메모</h1>
+                        <div className="flex flex-1 rounded-lg bg-gray-800 p-0.5 text-sm">
+                            {TABS.map(t => (
                                 <button
-                                    key={t}
-                                    onClick={() => setTab(t)}
-                                    className={`flex-1 rounded-md py-1.5 ${tab === t ? 'bg-gray-600 font-medium text-white' : 'text-gray-400'}`}
+                                    key={t.id}
+                                    onClick={() => changeTab(t.id)}
+                                    aria-pressed={tab === t.id}
+                                    className={`flex-1 rounded-md py-1.5 ${tab === t.id ? 'bg-gray-600 font-medium text-white' : 'text-gray-400'}`}
                                 >
-                                    {t === 'memos' ? '메모' : '이미지 모아보기'}
+                                    {t.label}
                                 </button>
                             ))}
                         </div>
@@ -283,7 +329,7 @@ const MemoPage: React.FC = () => {
 
                     <div className="-mx-4 flex gap-1.5 overflow-x-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                         <button onClick={() => { setCategory(null); setFavoritesOnly(false); }} className={chip(!category && !favoritesOnly)}>
-                            전체 {memos.length}
+                            전체 {scoped.length}
                         </button>
                         <button onClick={() => setFavoritesOnly(v => !v)} className={`${chip(favoritesOnly)} flex items-center gap-1`}>
                             <FiStar className={favoritesOnly ? 'text-amber-500' : 'text-amber-400'} fill="currentColor" size={14} /> 즐겨찾기
@@ -337,7 +383,8 @@ const MemoPage: React.FC = () => {
                         memos={visible}
                         refreshKey={galleryKey}
                         onOpenMemo={id => {
-                            setTab('memos');
+                            const target = memos.find(m => m.id === id);
+                            setTab(target?.kind === 'todo' ? 'todos' : 'memos');
                             setFocusId(id);
                         }}
                     />
@@ -349,12 +396,14 @@ const MemoPage: React.FC = () => {
                                 memo={memo}
                                 highlight={focusId === memo.id}
                                 activeTag={activeTag}
-                                onEdit={m => setEditor({memo: m})}
+                                onEdit={m => setEditor({memo: m, kind: m.kind})}
                                 onDelete={handleDelete}
                                 onToggleFavorite={toggleFavorite}
                                 onAddComment={addComment}
                                 onEditComment={editComment}
                                 onDeleteComment={removeComment}
+                                onUpdateContent={updateContent}
+                                onCopyReport={copyReport}
                                 onTagClick={t => setActiveTag(activeTag === t ? null : t)}
                                 onCategoryClick={c => setCategory(c)}
                             />
@@ -362,16 +411,16 @@ const MemoPage: React.FC = () => {
                     </div>
                 ) : hasFilter ? (
                     <div className="py-16 text-center text-sm text-gray-500">
-                        조건에 맞는 메모가 없습니다.
+                        조건에 맞는 {tab === 'todos' ? '할일이' : '메모가'} 없습니다.
                         <button onClick={clearFilters} className="mt-3 block w-full text-emerald-400">필터 모두 해제</button>
                     </div>
                 ) : (
                     <div className="py-12 text-center">
-                        <p className="mb-4 text-gray-400">무엇부터 기록할까요?</p>
+                        <p className="mb-4 text-gray-400">{tab === 'todos' ? '어떤 할일부터 정리할까요?' : '무엇부터 기록할까요?'}</p>
                         <div className="mx-auto flex max-w-xs flex-col gap-2">
-                            {PRESETS.map(p => (
-                                <button key={p.name} onClick={() => setEditor({memo: null, preset: p.name})} className="rounded-xl bg-gray-800 px-4 py-3 text-left hover:bg-gray-700">
-                                    {p.icon} {p.name} 기록하기
+                            {presetsFor(tabKind(tab)).map(p => (
+                                <button key={p.name} onClick={() => openNew(tabKind(tab), p.name)} className="rounded-xl bg-gray-800 px-4 py-3 text-left hover:bg-gray-700">
+                                    {p.icon} {p.name} {tab === 'todos' ? '할일 만들기' : '기록하기'}
                                 </button>
                             ))}
                         </div>
@@ -383,13 +432,13 @@ const MemoPage: React.FC = () => {
             {fabOpen && <div className="fixed inset-0 z-20 bg-black/40" onClick={() => setFabOpen(false)} />}
             <div className="fixed bottom-[calc(1.25rem+env(safe-area-inset-bottom))] right-5 z-30 flex flex-col items-end gap-2">
                 {fabOpen &&
-                    [...PRESETS.map(p => ({key: p.name, label: `${p.icon} ${p.name}`, preset: p.name as string | undefined})), {key: 'blank', label: '📝 빈 메모', preset: undefined}].map(item => (
+                    [
+                        ...presetsFor(tabKind(tab)).map(p => ({key: p.name, label: `${p.icon} ${p.name}`, preset: p.name as string | undefined})),
+                        {key: 'blank', label: tab === 'todos' ? '☑️ 빈 할일' : '📝 빈 메모', preset: undefined},
+                    ].map(item => (
                         <button
                             key={item.key}
-                            onClick={() => {
-                                setFabOpen(false);
-                                setEditor({memo: null, preset: item.preset});
-                            }}
+                            onClick={() => openNew(tabKind(tab), item.preset)}
                             className="rounded-full bg-gray-100 px-4 py-2.5 font-medium text-gray-900 shadow-lg"
                         >
                             {item.label}
@@ -397,7 +446,7 @@ const MemoPage: React.FC = () => {
                     ))}
                 <button
                     onClick={() => setFabOpen(v => !v)}
-                    aria-label={fabOpen ? '닫기' : '새 메모'}
+                    aria-label={fabOpen ? '닫기' : tab === 'todos' ? '새 할일' : '새 메모'}
                     aria-expanded={fabOpen}
                     className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-600 text-white shadow-lg hover:bg-emerald-500"
                 >
@@ -408,8 +457,10 @@ const MemoPage: React.FC = () => {
             {editor && (
                 <MemoEditor
                     memo={editor.memo}
+                    kind={editor.kind}
                     preset={editor.preset}
-                    categories={categories.map(c => c.name)}
+                    latestDaily={latestDaily}
+                    categories={countCategories(memos.filter(m => m.kind === editor.kind)).map(c => c.name)}
                     allTags={allTags}
                     onSave={handleSave}
                     onClose={() => setEditor(null)}
