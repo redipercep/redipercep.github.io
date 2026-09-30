@@ -1,10 +1,12 @@
-import React, {useEffect, useState} from 'react';
-import {FiEdit2, FiMessageCircle, FiStar, FiTrash2} from 'react-icons/fi';
+import React, {useEffect, useMemo, useState} from 'react';
+import {FiCopy, FiEdit2, FiMessageCircle, FiStar, FiTrash2} from 'react-icons/fi';
 import type {Memo} from '../types/memo';
 import {formatDate} from '../utils/format';
 import {categoryChip, categoryIcon} from '../utils/presets';
 import MarkdownView from './MarkdownView';
 import MemoComments from './MemoComments';
+import TodoView from './TodoView';
+import {todoStats} from '../utils/todo';
 
 interface Props {
     memo: Memo;
@@ -18,15 +20,21 @@ interface Props {
     onAddComment: (memo: Memo, content: string) => Promise<void>;
     onEditComment: (memo: Memo, commentId: string, content: string) => Promise<void>;
     onDeleteComment: (memo: Memo, commentId: string) => Promise<void>;
+    onUpdateContent: (memo: Memo, content: string) => void;
+    onCopyReport: (memo: Memo) => void;
 }
 
 const MemoCard: React.FC<Props> = ({
     memo, highlight, activeTag, onEdit, onDelete, onToggleFavorite, onTagClick, onCategoryClick,
-    onAddComment, onEditComment, onDeleteComment,
+    onAddComment, onEditComment, onDeleteComment, onUpdateContent, onCopyReport,
 }) => {
+    const isTodo = memo.kind === 'todo';
+    const stats = useMemo(() => (isTodo ? todoStats(memo.content) : null), [isTodo, memo.content]);
     const [expanded, setExpanded] = useState(false);
     const [showComments, setShowComments] = useState(false);
-    const isLong = memo.content.length > 220 || memo.content.split('\n').length > 8 || memo.imageIds.length > 0;
+    const isLong = isTodo
+        ? memo.content.split('\n').length > 20
+        : memo.content.length > 220 || memo.content.split('\n').length > 8 || memo.imageIds.length > 0;
     const collapsed = isLong && !expanded;
     const edited = memo.updatedAt.slice(0, 16) !== memo.createdAt.slice(0, 16);
 
@@ -50,6 +58,16 @@ const MemoCard: React.FC<Props> = ({
                         </button>
                     )}
                     <h2 className="break-words text-base font-semibold leading-snug text-gray-50">{memo.title}</h2>
+                    {stats && stats.total > 0 && (
+                        <div className="mt-1.5 flex items-center gap-2 text-xs text-gray-400">
+                            <div className="h-1.5 w-24 overflow-hidden rounded-full bg-gray-700">
+                                <div className="h-full rounded-full bg-emerald-500" style={{width: `${(stats.done / stats.total) * 100}%`}} />
+                            </div>
+                            <span>완료 {stats.done}/{stats.total}</span>
+                            {stats.progress > 0 && <span className="text-sky-400">진행 {stats.progress}</span>}
+                            {stats.overdue > 0 && <span className="font-medium text-red-400">마감 지남 {stats.overdue}</span>}
+                        </div>
+                    )}
                 </div>
                 <button
                     onClick={() => onToggleFavorite(memo)}
@@ -63,7 +81,7 @@ const MemoCard: React.FC<Props> = ({
 
             {memo.content.trim() && (
                 <div className={`relative mt-2 ${collapsed ? 'max-h-48 overflow-hidden' : ''}`}>
-                    <MarkdownView content={memo.content} />
+                    {isTodo ? <TodoView content={memo.content} onChange={c => onUpdateContent(memo, c)} /> : <MarkdownView content={memo.content} />}
                     {collapsed && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-gray-800 to-transparent" />}
                 </div>
             )}
@@ -101,6 +119,11 @@ const MemoCard: React.FC<Props> = ({
                 >
                     <FiMessageCircle size={16} /> 댓글 {memo.comments.length || ''}
                 </button>
+                {isTodo && (
+                    <button onClick={() => onCopyReport(memo)} aria-label="보고용 텍스트 복사" title="보고용 텍스트 복사" className="rounded-full p-2 text-gray-400 hover:bg-gray-700">
+                        <FiCopy size={17} />
+                    </button>
+                )}
                 <button onClick={() => onEdit(memo)} aria-label="수정" className="rounded-full p-2 text-gray-400 hover:bg-gray-700">
                     <FiEdit2 size={17} />
                 </button>

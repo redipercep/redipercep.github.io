@@ -1,22 +1,27 @@
 import React, {useEffect, useRef, useState} from 'react';
 import {FaHeading, FaQuoteLeft} from 'react-icons/fa';
+import {MdFormatIndentDecrease, MdFormatIndentIncrease} from 'react-icons/md';
 import {
     FiBold, FiCheckSquare, FiChevronDown, FiCode, FiColumns, FiEdit3, FiEye,
     FiHelpCircle, FiImage, FiItalic, FiLink, FiList, FiStar, FiX,
 } from 'react-icons/fi';
 import {addImage, deleteImages} from '../db/memoDB';
-import type {Memo} from '../types/memo';
+import type {Memo, MemoKind} from '../types/memo';
 import {deriveTitle, newId} from '../utils/format';
 import {extractImageIds, IMG_PROTOCOL, prepareImage, releaseImageUrls} from '../utils/image';
-import {categoryChip, findPreset, PRESETS} from '../utils/presets';
+import {categoryChip, DAILY, findPreset, isTemplate, presetsFor} from '../utils/presets';
+import {dailyTitle, normalizeTodo, removeCompleted, todayStr} from '../utils/todo';
 import MarkdownHelp from './MarkdownHelp';
 import MarkdownView from './MarkdownView';
+import TodoView from './TodoView';
 
 type ViewMode = 'edit' | 'split' | 'preview';
 
 interface Props {
-    memo: Memo | null;          // null이면 새 메모
-    preset?: string;            // 새 메모를 프리셋 카테고리로 시작
+    memo: Memo | null;          // null이면 새 글
+    kind: MemoKind;
+    preset?: string;            // 새 글을 프리셋 카테고리로 시작
+    latestDaily?: Memo | null;  // 가장 최근 일일업무 (새 일일업무의 바탕)
     categories: string[];
     allTags: string[];
     onSave: (memo: Memo, removedImageIds: string[]) => Promise<void>;
@@ -26,12 +31,15 @@ interface Props {
 const VIEW_KEY = 'memo.editorView';
 const normalizeTag = (t: string) => t.trim().replace(/^#+/, '').replace(/[,\s]+/g, '');
 
-const MemoEditor: React.FC<Props> = ({memo, preset, categories, allTags, onSave, onClose}) => {
-    const presetInfo = preset ? findPreset(preset) : undefined;
+const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, categories, allTags, onSave, onClose}) => {
+    const isTodo = kind === 'todo';
+    const presetInfo = preset ? findPreset(preset, kind) : undefined;
+    // 새 일일업무: 오늘 날짜 제목 + 가장 최근 일일업무 내용을 이어받음
+    const dailyInit = isTodo && !memo && preset === DAILY;
     const initial = useRef({
-        title: memo?.title ?? '',
+        title: memo?.title ?? (dailyInit ? dailyTitle() : ''),
         category: memo?.category ?? preset ?? '',
-        content: memo?.content ?? presetInfo?.template ?? '',
+        content: memo?.content ?? (dailyInit && latestDaily ? latestDaily.content : presetInfo?.template ?? ''),
         tags: memo?.hashtags ?? [],
         isFavorite: memo?.isFavorite ?? false,
     }).current;
@@ -51,6 +59,7 @@ const MemoEditor: React.FC<Props> = ({memo, preset, categories, allTags, onSave,
     });
     const [showMeta, setShowMeta] = useState(!memo && !preset);
     const [showHelp, setShowHelp] = useState(false);
+    const [carriedFrom, setCarriedFrom] = useState<string | null>(dailyInit && latestDaily ? latestDaily.title : null);
     const [saving, setSaving] = useState(false);
     const [uploading, setUploading] = useState(false);
 
@@ -58,7 +67,7 @@ const MemoEditor: React.FC<Props> = ({memo, preset, categories, allTags, onSave,
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const fileRef = useRef<HTMLInputElement>(null);
 
-    const chipCategories = [...new Set([...PRESETS.map(p => p.name), ...categories])];
+    const chipCategories = [...new Set([...presetsFor(kind).map(p => p.name), ...categories])];
     const [customCategory, setCustomCategory] = useState(chipCategories.includes(initial.category) ? '' : initial.category);
 
     // 편집기가 열려 있는 동안 뒤 화면 스크롤 방지
@@ -124,6 +133,40 @@ const MemoEditor: React.FC<Props> = ({memo, preset, categories, allTags, onSave,
             return {text, selStart: pos, selEnd: pos};
         });
 
+    const indent = () =>
+        applyEdit((t, s, e) => {
+            const ls = t.lastIndexOf('\n', s - 1) + 1;
+            return {text: `${t.slice(0, ls)}  ${t.slice(ls)}`, selStart: s + 2, selEnd: e + 2};
+        });
+
+    const outdent = () =>
+        applyEdit((t, s, e) => {
+            const ls = t.lastIndexOf('\n', s - 1) + 1;
+            const n = /^( {1,2}|\t)/.exec(t.slice(ls))?.[0].length ?? 0;
+            return {text: t.slice(0, ls) + t.slice(ls + n), selStart: Math.max(ls, s - n), selEnd: Math.max(ls, e - n)};
+        });
+
+    /** 목록 줄에서 줄바꿈하면 같은 들여쓰기로 다음 항목을 이어준다. 빈 항목에서 누르면 목록 종료 */
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return; // 한글 조합 중에는 건드리지 않음
+        const ta = e.currentTarget;
+        const pos = ta.selectionStart;
+        if (pos !== ta.selectionEnd) return;
+        const ls = content.lastIndexOf('\n', pos - 1) + 1;
+        const before = content.slice(ls, pos);
+        const m = /^([ \t]*)(?:([-*+])|(\d+)([.)]))[ \t]+(\[[ xX/-]\][ \t]*)?/.exec(before);
+        if (!m) return;
+        e.preventDefault();
+        if (!before.slice(m[0].length).trim()) {
+            applyEdit(t => ({text: t.slice(0, ls) + t.slice(pos), selStart: ls, selEnd: ls}));
+            return;
+        }
+        const bullet = m[3] ? `${Number(m[3]) + 1}${m[4]}` : m[2];
+        const box = m[5] || isTodo ? '[ ] ' : '';
+        const snippet = `\n${m[1]}${bullet} ${box}`;
+        applyEdit(t => ({text: t.slice(0, pos) + snippet + t.slice(pos), selStart: pos + snippet.length, selEnd: pos + snippet.length}));
+    };
+
     // ─── 이미지 ──────────────────────────────────────
     const handleFiles = async (files: FileList | File[] | null) => {
         const list = Array.from(files ?? []).filter(f => f.type.startsWith('image/'));
@@ -167,8 +210,15 @@ const MemoEditor: React.FC<Props> = ({memo, preset, categories, allTags, onSave,
         const next = category === name ? '' : name;
         setCategory(next);
         setCustomCategory('');
-        const template = findPreset(next)?.template;
-        if (template && !content.trim()) setContent(template);
+        if (!isTemplate(content, kind)) return; // 이미 작성한 내용은 건드리지 않음
+        if (isTodo && !memo && next === DAILY) {
+            if (!title.trim()) setTitle(dailyTitle());
+            setContent(latestDaily?.content ?? findPreset(DAILY, kind)?.template ?? '');
+            setCarriedFrom(latestDaily?.title ?? null);
+            return;
+        }
+        const template = findPreset(next, kind)?.template;
+        if (template) setContent(template);
     };
 
     const addTag = (raw: string) => {
@@ -188,14 +238,16 @@ const MemoEditor: React.FC<Props> = ({memo, preset, categories, allTags, onSave,
             return;
         }
         const now = new Date().toISOString();
-        const imageIds = extractImageIds(content);
+        const finalContent = isTodo ? normalizeTodo(content, todayStr()) : content;
+        const imageIds = extractImageIds(finalContent);
         const pendingTag = normalizeTag(tagInput);
         const next: Memo = {
             id: memo?.id,
             uid: memo?.uid ?? newId(),
-            title: title.trim() || deriveTitle(content),
+            kind,
+            title: title.trim() || (isTodo && category.trim() === DAILY ? dailyTitle() : deriveTitle(finalContent)),
             category: category.trim(),
-            content,
+            content: finalContent,
             hashtags: pendingTag && !tags.includes(pendingTag) ? [...tags, pendingTag] : tags,
             imageIds,
             isFavorite,
@@ -224,12 +276,18 @@ const MemoEditor: React.FC<Props> = ({memo, preset, categories, allTags, onSave,
     };
 
     // ─── 화면 ────────────────────────────────────────
+    const listTools = [
+        {label: isTodo ? '할일 추가' : '체크리스트', icon: <FiCheckSquare />, action: () => (isTodo ? insertBlock('- [ ] ') : prefixLine('- [ ] '))},
+        {label: '들여쓰기(하위 항목)', icon: <MdFormatIndentIncrease size={18} />, action: indent},
+        {label: '내어쓰기', icon: <MdFormatIndentDecrease size={18} />, action: outdent},
+    ];
     const tools: {label: string; icon: React.ReactNode; action: () => void}[] = [
+        ...(isTodo ? listTools : []),
         {label: '제목', icon: <FaHeading size={14} />, action: () => prefixLine('## ')},
         {label: '굵게', icon: <FiBold />, action: () => wrap('**')},
         {label: '기울임', icon: <FiItalic />, action: () => wrap('*')},
         {label: '목록', icon: <FiList />, action: () => prefixLine('- ')},
-        {label: '체크리스트', icon: <FiCheckSquare />, action: () => prefixLine('- [ ] ')},
+        ...(isTodo ? [] : listTools),
         {label: '인용', icon: <FaQuoteLeft size={13} />, action: () => prefixLine('> ')},
         {label: '코드', icon: <FiCode />, action: () => wrap('`')},
         {label: '링크', icon: <FiLink />, action: () => wrap('[', '](https://)', '링크 이름')},
@@ -252,7 +310,7 @@ const MemoEditor: React.FC<Props> = ({memo, preset, categories, allTags, onSave,
                 <button onClick={handleClose} aria-label="닫기" className="rounded-full p-2 hover:bg-gray-800">
                     <FiX size={22} />
                 </button>
-                <span className="flex-1 font-semibold">{memo ? '메모 수정' : '새 메모'}</span>
+                <span className="flex-1 font-semibold">{isTodo ? (memo ? '할일 수정' : '새 할일') : memo ? '메모 수정' : '새 메모'}</span>
                 <button
                     onClick={() => setIsFavorite(v => !v)}
                     aria-label={isFavorite ? '즐겨찾기 해제' : '즐겨찾기'}
@@ -364,6 +422,18 @@ const MemoEditor: React.FC<Props> = ({memo, preset, categories, allTags, onSave,
                 )}
             </div>
 
+            {carriedFrom && (
+                <div className="flex items-center gap-2 border-b border-gray-800 bg-emerald-950/50 px-3 py-1.5 text-sm text-emerald-200">
+                    <span className="min-w-0 flex-1 truncate">{carriedFrom}에서 이어받음</span>
+                    <button onClick={() => setContent(removeCompleted(content))} className="shrink-0 rounded-full bg-emerald-800/70 px-3 py-1 text-xs">
+                        완료 항목 빼기
+                    </button>
+                    <button onClick={() => setCarriedFrom(null)} aria-label="안내 닫기" className="shrink-0 p-1">
+                        <FiX size={16} />
+                    </button>
+                </div>
+            )}
+
             {/* 편집 도구 */}
             <div className="flex items-center gap-1 border-b border-gray-800 px-1 py-1">
                 <div className="flex flex-1 items-center overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -404,7 +474,8 @@ const MemoEditor: React.FC<Props> = ({memo, preset, categories, allTags, onSave,
                         value={content}
                         onChange={e => setContent(e.target.value)}
                         onPaste={handlePaste}
-                        placeholder={'마크다운으로 작성하세요.\n예) ## 오늘 한 일\n- [ ] 보고서 초안'}
+                        onKeyDown={handleKeyDown}
+                        placeholder={isTodo ? '- [ ] 할 일을 적으세요\n  - [ ] 들여쓰면 하위 항목' : '마크다운으로 작성하세요.\n예) ## 오늘 한 일\n- [ ] 보고서 초안'}
                         className={`min-h-0 w-full flex-1 resize-none bg-transparent p-3 font-mono text-base leading-relaxed outline-none placeholder:text-gray-600 ${
                             view === 'split' ? 'border-b border-gray-800 md:border-b-0 md:border-r' : ''
                         }`}
@@ -412,13 +483,13 @@ const MemoEditor: React.FC<Props> = ({memo, preset, categories, allTags, onSave,
                 )}
                 {view !== 'edit' && (
                     <div className={`min-h-0 flex-1 overflow-y-auto p-3 pb-[calc(1rem+env(safe-area-inset-bottom))] ${view === 'split' ? 'bg-gray-950/40' : ''}`}>
-                        {content.trim() ? <MarkdownView content={content} /> : <p className="text-sm text-gray-600">작성한 내용이 여기에 보입니다.</p>}
+                        {!content.trim() ? <p className="text-sm text-gray-600">작성한 내용이 여기에 보입니다.</p> : isTodo ? <TodoView content={content} /> : <MarkdownView content={content} />}
                     </div>
                 )}
             </div>
 
             <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={e => handleFiles(e.target.files)} />
-            {showHelp && <MarkdownHelp onClose={() => setShowHelp(false)} />}
+            {showHelp && <MarkdownHelp kind={kind} onClose={() => setShowHelp(false)} />}
         </div>
     );
 };

@@ -1,6 +1,8 @@
 import React from 'react';
 import {FiX} from 'react-icons/fi';
+import type {MemoKind} from '../types/memo';
 import MarkdownView from './MarkdownView';
+import TodoView from './TodoView';
 
 const ITEMS: {label: string; syntax: string}[] = [
     {label: '제목', syntax: '# 큰 제목\n## 중간 제목\n### 작은 제목'},
@@ -15,7 +17,14 @@ const ITEMS: {label: string; syntax: string}[] = [
     {label: '구분선', syntax: '위 내용\n\n---\n\n아래 내용'},
 ];
 
-const MarkdownHelp: React.FC<{onClose: () => void}> = ({onClose}) => (
+const TODO_EXAMPLE = `- [ ] 대기
+- [/] 진행중인 상위 항목
+  - [x] 끝난 하위 항목 ✅ 2026-09-30 10:20
+  - [/] 진행중인 하위 항목
+- [-] 보류
+- [ ] 마감이 있는 일 🛫 2026-09-30 📅 2026-10-02`;
+
+const MarkdownHelp: React.FC<{onClose: () => void; kind?: MemoKind}> = ({onClose, kind = 'memo'}) => (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 sm:items-center" onClick={onClose}>
         <div
             role="dialog"
@@ -30,6 +39,23 @@ const MarkdownHelp: React.FC<{onClose: () => void}> = ({onClose}) => (
                 </button>
             </div>
             <div className="overflow-y-auto px-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+                {kind === 'todo' && (
+                    <section className="border-b border-gray-800 py-3">
+                        <h3 className="mb-2 text-sm font-semibold text-gray-400">할일 작성법</h3>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                            <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg bg-gray-950 p-2 font-mono text-sm text-gray-300">{TODO_EXAMPLE}</pre>
+                            <div className="rounded-lg bg-gray-800 p-2">
+                                <TodoView content={TODO_EXAMPLE} />
+                            </div>
+                        </div>
+                        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-gray-400">
+                            <li>목록 항목(- 로 시작하는 줄)은 모두 할일이 됩니다. 들여쓰면 하위 항목입니다.</li>
+                            <li>상태: <code>[ ]</code> 대기, <code>[/]</code> 진행중, <code>[x]</code> 완료, <code>[-]</code> 보류</li>
+                            <li>🛫 시작일, 📅 마감일은 저장 목록에서 항목을 눌러 바꾸는 게 편합니다. 시작일이 없으면 저장할 때 오늘로 채워집니다.</li>
+                            <li>줄 끝에서 줄바꿈하면 다음 할일이 자동으로 이어집니다.</li>
+                        </ul>
+                    </section>
+                )}
                 {ITEMS.map(item => (
                     <section key={item.label} className="border-b border-gray-800 py-3 last:border-0">
                         <h3 className="mb-2 text-sm font-semibold text-gray-400">{item.label}</h3>
