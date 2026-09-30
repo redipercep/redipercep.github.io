@@ -66,8 +66,9 @@ function forPut(memo: Memo): Memo {
 }
 
 // ─── 메모 ──────────────────────────────────────────
+/** 예전에 저장된 데이터에 없는 필드를 기본값으로 채운다 */
 export const getAllMemos = () =>
-    run<Memo[]>(MEMOS, 'readonly', s => s.getAll()).then(list => list.map(m => ({...m, comments: m.comments ?? []})));
+    run<Memo[]>(MEMOS, 'readonly', s => s.getAll()).then(list => list.map(m => ({...m, kind: m.kind ?? 'memo', comments: m.comments ?? []})));
 
 export const saveMemo = (memo: Memo) =>
     run<IDBValidKey>(MEMOS, 'readwrite', s => s.put(forPut(memo))).then(key => key as number);
