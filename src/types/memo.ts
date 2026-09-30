@@ -1,6 +1,9 @@
+export type MemoKind = 'memo' | 'todo';
+
 export interface Memo {
     id?: number;            // IndexedDB autoIncrement 키 (장치마다 다를 수 있음)
     uid: string;            // 장치 간 이동 시 같은 메모인지 판별하는 고유 ID
+    kind: MemoKind;         // 메모 / 할일
     title: string;
     category: string;
     content: string;        // 마크다운 원문
