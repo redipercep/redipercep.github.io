@@ -1,11 +1,15 @@
+import type {MemoKind} from '../types/memo';
+
 export interface Preset {
     name: string;
     icon: string;
     chip: string;       // 카테고리 칩 색상 (Tailwind 클래스)
-    template: string;   // 빈 메모에서 선택하면 채워지는 기본 틀
+    template: string;   // 빈 글에서 선택하면 채워지는 기본 틀
 }
 
-export const PRESETS: Preset[] = [
+export const DAILY = '일일업무';
+
+export const MEMO_PRESETS: Preset[] = [
     {
         name: '업무',
         icon: '💼',
@@ -26,6 +30,19 @@ export const PRESETS: Preset[] = [
     },
 ];
 
-export const findPreset = (category: string) => PRESETS.find(p => p.name === category);
+export const TODO_PRESETS: Preset[] = [
+    {name: DAILY, icon: '📋', chip: 'bg-emerald-900/60 text-emerald-200', template: '## 오늘 할 일\n- [ ] \n'},
+    {name: '업무', icon: '💼', chip: 'bg-sky-900/70 text-sky-200', template: '- [ ] \n'},
+    {name: '개인', icon: '🏠', chip: 'bg-violet-900/60 text-violet-200', template: '- [ ] \n'},
+];
+
+export const presetsFor = (kind: MemoKind) => (kind === 'todo' ? TODO_PRESETS : MEMO_PRESETS);
+
+export const findPreset = (category: string, kind?: MemoKind) =>
+    (kind ? presetsFor(kind) : [...MEMO_PRESETS, ...TODO_PRESETS]).find(p => p.name === category);
+
+export const isTemplate = (content: string, kind: MemoKind) =>
+    !content.trim() || presetsFor(kind).some(p => p.template.trim() === content.trim());
+
 export const categoryIcon = (category: string) => findPreset(category)?.icon ?? '📁';
 export const categoryChip = (category: string) => findPreset(category)?.chip ?? 'bg-gray-700 text-gray-200';

@@ -20,7 +20,28 @@ export function newId() {
 export function deriveTitle(content: string) {
     const line = content
         .split('\n')
-        .map(l => l.replace(/!\[[^\]]*]\([^)]*\)/g, '').replace(/^[\s#>*\-+]+|\[[ xX]]\s*/g, '').trim())
+        .map(l =>
+            l
+                .replace(/!\[[^\]]*]\([^)]*\)/g, '')
+                .replace(/(🛫|📅|🔄|⏸\uFE0F?|✅)\s*\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2})?/gu, '')
+                .replace(/^[\s#>*\-+]+|\[[ xX/-]]\s*/g, '')
+                .trim(),
+        )
         .find(Boolean);
     return line ? line.slice(0, 40) : `${formatDate(new Date().toISOString())} 메모`;
+}
+
+export async function copyText(text: string) {
+    try {
+        await navigator.clipboard.writeText(text);
+        return true;
+    } catch {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        ta.remove();
+        return ok;
+    }
 }

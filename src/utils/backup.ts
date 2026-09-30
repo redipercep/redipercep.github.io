@@ -65,6 +65,7 @@ function normalizeMemo(r: Raw): Memo {
     return {
         id: typeof r.id === 'number' ? r.id : undefined,
         uid: str(r.uid) || newId(),
+        kind: r.kind === 'todo' ? 'todo' : 'memo',
         title: str(r.title) || '제목 없음',
         category: str(r.category),
         content,
