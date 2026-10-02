@@ -22,6 +22,8 @@ interface Props {
     kind: MemoKind;
     preset?: string;            // 새 글을 프리셋 카테고리로 시작
     latestDaily?: Memo | null;  // 가장 최근 일일업무 (새 일일업무의 바탕)
+    initialTitle?: string;      // 새 글의 기본 제목 (할일에서 메모를 만들 때)
+    linkNote?: string;          // 저장 시 연결될 할일 안내
     categories: string[];
     allTags: string[];
     onSave: (memo: Memo, removedImageIds: string[]) => Promise<void>;
@@ -31,13 +33,13 @@ interface Props {
 const VIEW_KEY = 'memo.editorView';
 const normalizeTag = (t: string) => t.trim().replace(/^#+/, '').replace(/[,\s]+/g, '');
 
-const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, categories, allTags, onSave, onClose}) => {
+const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTitle, linkNote, categories, allTags, onSave, onClose}) => {
     const isTodo = kind === 'todo';
     const presetInfo = preset ? findPreset(preset, kind) : undefined;
     // 새 일일업무: 오늘 날짜 제목 + 가장 최근 일일업무 내용을 이어받음
     const dailyInit = isTodo && !memo && preset === DAILY;
     const initial = useRef({
-        title: memo?.title ?? (dailyInit ? dailyTitle() : ''),
+        title: memo?.title ?? initialTitle ?? (dailyInit ? dailyTitle() : ''),
         category: memo?.category ?? preset ?? '',
         content: memo?.content ?? (dailyInit && latestDaily ? latestDaily.content : presetInfo?.template ?? ''),
         tags: memo?.hashtags ?? [],
@@ -421,6 +423,12 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, categorie
                     </div>
                 )}
             </div>
+
+            {linkNote && (
+                <div className="border-b border-gray-800 bg-violet-950/50 px-3 py-1.5 text-sm text-violet-200">
+                    <span className="block truncate">🔗 저장하면 할일 "{linkNote}"에 연결됩니다</span>
+                </div>
+            )}
 
             {carriedFrom && (
                 <div className="flex items-center gap-2 border-b border-gray-800 bg-emerald-950/50 px-3 py-1.5 text-sm text-emerald-200">

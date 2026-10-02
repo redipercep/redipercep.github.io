@@ -22,11 +22,13 @@ interface Props {
     onDeleteComment: (memo: Memo, commentId: string) => Promise<void>;
     onUpdateContent: (memo: Memo, content: string) => void;
     onCopyReport: (memo: Memo) => void;
+    backlinks?: {todo: Memo; text: string}[];   // 이 메모가 연결된 할일 항목
+    onOpenTodo?: (todoId: number) => void;
 }
 
 const MemoCard: React.FC<Props> = ({
     memo, highlight, activeTag, onEdit, onDelete, onToggleFavorite, onTagClick, onCategoryClick,
-    onAddComment, onEditComment, onDeleteComment, onUpdateContent, onCopyReport,
+    onAddComment, onEditComment, onDeleteComment, onUpdateContent, onCopyReport, backlinks = [], onOpenTodo,
 }) => {
     const isTodo = memo.kind === 'todo';
     const stats = useMemo(() => (isTodo ? todoStats(memo.content) : null), [isTodo, memo.content]);
@@ -81,7 +83,7 @@ const MemoCard: React.FC<Props> = ({
 
             {memo.content.trim() && (
                 <div className={`relative mt-2 ${collapsed ? 'max-h-48 overflow-hidden' : ''}`}>
-                    {isTodo ? <TodoView content={memo.content} onChange={c => onUpdateContent(memo, c)} /> : <MarkdownView content={memo.content} />}
+                    {isTodo ? <TodoView content={memo.content} owner={memo} onChange={c => onUpdateContent(memo, c)} /> : <MarkdownView content={memo.content} />}
                     {collapsed && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-gray-800 to-transparent" />}
                 </div>
             )}
@@ -89,6 +91,23 @@ const MemoCard: React.FC<Props> = ({
                 <button onClick={() => setExpanded(v => !v)} className="mt-1 py-1 text-sm font-medium text-emerald-400">
                     {expanded ? '접기' : '전체 보기'}
                 </button>
+            )}
+
+            {backlinks.length > 0 && (
+                <div className="mt-3 space-y-1">
+                    <div className="text-xs text-gray-500">연결된 할일</div>
+                    {backlinks.slice(0, 3).map(b => (
+                        <button
+                            key={`${b.todo.id}-${b.text}`}
+                            onClick={() => b.todo.id != null && onOpenTodo?.(b.todo.id)}
+                            className="flex w-full items-center gap-2 rounded-lg bg-gray-900/60 px-3 py-2 text-left text-sm hover:bg-gray-900"
+                        >
+                            <span className="min-w-0 flex-1 truncate text-gray-200">☑️ {b.text}</span>
+                            <span className="max-w-[45%] shrink-0 truncate text-xs text-gray-500">{b.todo.title}</span>
+                        </button>
+                    ))}
+                    {backlinks.length > 3 && <div className="text-xs text-gray-500">외 {backlinks.length - 3}개</div>}
+                </div>
             )}
 
             {memo.hashtags.length > 0 && (

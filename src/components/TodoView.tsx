@@ -1,11 +1,13 @@
-import React, {useMemo, useState} from 'react';
+import React, {useContext, useMemo, useState} from 'react';
 import type {IconType} from 'react-icons';
-import {FiCheckCircle, FiChevronDown, FiCircle, FiPauseCircle, FiPlayCircle, FiX} from 'react-icons/fi';
+import {FiCheckCircle, FiChevronDown, FiCircle, FiFileText, FiLink, FiPauseCircle, FiPlayCircle, FiPlus, FiX} from 'react-icons/fi';
+import type {Memo} from '../types/memo';
 import {
-    changeStatus, parseTodo, setTaskDates, shortStamp, STATUS_LABEL, STATUS_ORDER,
+    changeStatus, parseTodo, removeTaskLink, setTaskDates, shortStamp, STATUS_LABEL, STATUS_ORDER,
     type Task, type TaskStatus, todayStr,
 } from '../utils/todo';
 import MarkdownView, {InlineMarkdown} from './MarkdownView';
+import {type TaskLinkApi, TaskLinkContext} from './TaskLinkContext';
 
 export const STATUS_STYLE: Record<TaskStatus, {icon: IconType; color: string}> = {
     todo: {icon: FiCircle, color: 'text-gray-500'},
@@ -17,8 +19,9 @@ export const STATUS_STYLE: Record<TaskStatus, {icon: IconType; color: string}> =
 const statusTime = (t: Task, s: TaskStatus) =>
     s === 'progress' ? t.progressAt : s === 'done' ? t.doneAt : s === 'hold' ? t.holdAt : undefined;
 
-const TaskMeta: React.FC<{task: Task; today: string}> = ({task, today}) => {
+const TaskMeta: React.FC<{task: Task; today: string; memoCount: number}> = ({task, today, memoCount}) => {
     const items: {text: string; cls: string}[] = [];
+    if (memoCount) items.push({text: `📝 메모 ${memoCount}`, cls: 'font-medium text-violet-300'});
     if (task.start) items.push({text: `시작일 ${shortStamp(task.start)}`, cls: 'text-gray-500'});
     if (task.due) {
         const open = task.status !== 'done';
@@ -41,7 +44,15 @@ const TaskMeta: React.FC<{task: Task; today: string}> = ({task, today}) => {
 
 const allDescendants = (t: Task): Task[] => t.children.flatMap(c => [c, ...allDescendants(c)]).filter(c => c.text);
 
-const TaskRow: React.FC<{task: Task; today: string; onOpen?: (t: Task) => void}> = ({task, today, onOpen}) => {
+interface RowProps {
+    task: Task;
+    today: string;
+    onOpen?: (t: Task) => void;             // 상태 변경 창
+    onRowClick?: (t: Task) => void;         // 항목 누름 (연결된 메모가 있으면 메모 팝업)
+    memoCount: (t: Task) => number;
+}
+
+const TaskRow: React.FC<RowProps> = ({task, today, onOpen, onRowClick, memoCount}) => {
     const [collapsed, setCollapsed] = useState(false);
     if (!task.text && !task.children.length) return null;
     const subs = task.children.length ? allDescendants(task) : [];
@@ -62,7 +73,7 @@ const TaskRow: React.FC<{task: Task; today: string; onOpen?: (t: Task) => void}>
                 >
                     <Icon size={20} />
                 </button>
-                <div className={`min-w-0 flex-1 leading-snug ${onOpen ? 'cursor-pointer' : ''}`} onClick={() => onOpen?.(task)}>
+                <div className={`min-w-0 flex-1 leading-snug ${onRowClick ? 'cursor-pointer' : ''}`} onClick={() => onRowClick?.(task)}>
                     <div className={textCls}>
                         {/* 진행중인 항목과 그 상위 항목은 코드로 표시 */}
                         {task.active
@@ -72,7 +83,7 @@ const TaskRow: React.FC<{task: Task; today: string; onOpen?: (t: Task) => void}>
                     {task.notes.map((n, i) => (
                         <div key={i} className="mt-0.5 text-sm text-gray-400"><InlineMarkdown content={n} /></div>
                     ))}
-                    <TaskMeta task={task} today={today} />
+                    <TaskMeta task={task} today={today} memoCount={memoCount(task)} />
                 </div>
                 {subs.length > 0 && (
                     <button
@@ -92,7 +103,7 @@ const TaskRow: React.FC<{task: Task; today: string; onOpen?: (t: Task) => void}>
             {task.children.length > 0 && !collapsed && (
                 <ul className="ml-2.5 border-l border-gray-700 pl-3">
                     {task.children.map(c => (
-                        <TaskRow key={c.line} task={c} today={today} onOpen={onOpen} />
+                        <TaskRow key={c.line} task={c} today={today} onOpen={onOpen} onRowClick={onRowClick} memoCount={memoCount} />
                     ))}
                 </ul>
             )}
@@ -102,18 +113,19 @@ const TaskRow: React.FC<{task: Task; today: string; onOpen?: (t: Task) => void}>
 
 interface SheetProps {
     task: Task;
+    links?: {api: TaskLinkApi; owner: Memo; onUnlink: (uid: string) => void};
     onStatus: (s: TaskStatus) => void;
     onDates: (d: {start?: string | null; due?: string | null}) => void;
     onClose: () => void;
 }
 
-const TaskSheet: React.FC<SheetProps> = ({task, onStatus, onDates, onClose}) => (
+const TaskSheet: React.FC<SheetProps> = ({task, links, onStatus, onDates, onClose}) => (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 sm:items-center" onClick={onClose}>
         <div
             role="dialog"
             aria-label="할일 상태 변경"
             onClick={e => e.stopPropagation()}
-            className="w-full rounded-t-2xl bg-gray-900 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] text-gray-200 sm:max-w-sm sm:rounded-2xl"
+            className="max-h-[90dvh] w-full overflow-y-auto rounded-t-2xl bg-gray-900 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] text-gray-200 sm:max-w-sm sm:rounded-2xl"
         >
             <div className="mb-3 flex items-start gap-2">
                 <p className="min-w-0 flex-1 break-words font-medium text-gray-50">{task.text}</p>
@@ -174,6 +186,63 @@ const TaskSheet: React.FC<SheetProps> = ({task, onStatus, onDates, onClose}) => 
                     />
                 </label>
             </div>
+
+            {links && links.owner.id != null && (() => {
+                const {api, owner, onUnlink} = links;
+                const target = {todoId: owner.id as number, line: task.line, text: task.text};
+                return (
+                    <div className="mt-5">
+                        <h3 className="mb-2 text-sm text-gray-400">연결된 메모</h3>
+                        {task.links.length ? (
+                            <ul className="space-y-1.5">
+                                {task.links.map(uid => {
+                                    const m = api.memosByUid.get(uid);
+                                    return (
+                                        <li key={uid} className="flex items-center gap-1 rounded-lg bg-gray-800 pl-3">
+                                            <button
+                                                onClick={() => {
+                                                    onClose();
+                                                    api.openMemos([uid]);
+                                                }}
+                                                disabled={!m}
+                                                className="flex min-w-0 flex-1 items-center gap-2 py-2.5 text-left disabled:text-gray-500"
+                                            >
+                                                <FiFileText className="shrink-0 text-violet-300" />
+                                                <span className="truncate">{m ? m.title : '삭제된 메모'}</span>
+                                            </button>
+                                            <button onClick={() => onUnlink(uid)} aria-label="연결 해제" className="shrink-0 rounded-full p-2.5 text-gray-500 hover:text-red-400">
+                                                <FiX size={16} />
+                                            </button>
+                                        </li>
+                                    );
+                                })}
+                            </ul>
+                        ) : (
+                            <p className="text-sm text-gray-500">항목에 메모를 연결하면, 항목을 눌러 바로 볼 수 있어요.</p>
+                        )}
+                        <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                            <button
+                                onClick={() => {
+                                    onClose();
+                                    api.createMemo(target);
+                                }}
+                                className="flex items-center justify-center gap-1.5 rounded-xl bg-violet-700/80 py-2.5 font-medium text-white hover:bg-violet-600"
+                            >
+                                <FiPlus /> 새 메모 작성
+                            </button>
+                            <button
+                                onClick={() => {
+                                    onClose();
+                                    api.pickMemo(target);
+                                }}
+                                className="flex items-center justify-center gap-1.5 rounded-xl bg-gray-800 py-2.5 hover:bg-gray-700"
+                            >
+                                <FiLink /> 기존 메모 연결
+                            </button>
+                        </div>
+                    </div>
+                );
+            })()}
         </div>
     </div>
 );
@@ -181,14 +250,27 @@ const TaskSheet: React.FC<SheetProps> = ({task, onStatus, onDates, onClose}) => 
 interface Props {
     content: string;
     onChange?: (content: string) => void; // 없으면 읽기 전용 (미리보기)
+    owner?: Memo;                         // 이 내용을 가진 할일 (메모 연결에 필요)
 }
 
-const TodoView: React.FC<Props> = ({content, onChange}) => {
+const TodoView: React.FC<Props> = ({content, onChange, owner}) => {
+    const api = useContext(TaskLinkContext);
+    const linkApi = onChange && owner ? api : null;
+    const existingLinks = (t: Task) => (linkApi ? t.links.filter(uid => linkApi.memosByUid.has(uid)) : []);
     const parsed = useMemo(() => parseTodo(content), [content]);
     const [openLine, setOpenLine] = useState<number | null>(null);
     const today = todayStr();
     const open = openLine == null ? undefined : parsed.tasks.find(t => t.line === openLine);
     const onOpen = onChange ? (t: Task) => setOpenLine(t.line) : undefined;
+    // 항목을 누르면: 연결된 메모가 있으면 메모 팝업, 없으면 상태 변경 창
+    const onRowClick = onOpen
+        ? (t: Task) => {
+              const uids = existingLinks(t);
+              if (linkApi && uids.length) linkApi.openMemos(uids);
+              else onOpen(t);
+          }
+        : undefined;
+    const memoCount = (t: Task) => existingLinks(t).length;
 
     return (
         <div className="text-[15px]">
@@ -198,7 +280,7 @@ const TodoView: React.FC<Props> = ({content, onChange}) => {
                 ) : (
                     <ul key={i} className="mb-2">
                         {seg.roots.map(t => (
-                            <TaskRow key={t.line} task={t} today={today} onOpen={onOpen} />
+                            <TaskRow key={t.line} task={t} today={today} onOpen={onOpen} onRowClick={onRowClick} memoCount={memoCount} />
                         ))}
                     </ul>
                 ),
@@ -206,6 +288,7 @@ const TodoView: React.FC<Props> = ({content, onChange}) => {
             {open && onChange && (
                 <TaskSheet
                     task={open}
+                    links={linkApi && owner ? {api: linkApi, owner, onUnlink: uid => onChange(removeTaskLink(content, open.line, uid))} : undefined}
                     onClose={() => setOpenLine(null)}
                     onStatus={s => {
                         if (s !== open.status) onChange(changeStatus(content, open.line, s));

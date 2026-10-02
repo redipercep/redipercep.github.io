@@ -53,6 +53,7 @@ const MarkdownHelp: React.FC<{onClose: () => void; kind?: MemoKind}> = ({onClose
                             <li>상태: <code>[ ]</code> 대기, <code>[/]</code> 진행중, <code>[x]</code> 완료, <code>[-]</code> 보류</li>
                             <li>🛫 시작일, 📅 마감일은 저장 목록에서 항목을 눌러 바꾸는 게 편합니다. 시작일이 없으면 저장할 때 오늘로 채워집니다.</li>
                             <li>줄 끝에서 줄바꿈하면 다음 할일이 자동으로 이어집니다.</li>
+                            <li>상태 아이콘을 누르면 상태·날짜를 바꾸고 메모를 연결할 수 있습니다(🔗). 메모가 연결된 항목은 내용을 누르면 메모가 열립니다.</li>
                         </ul>
                     </section>
                 )}
