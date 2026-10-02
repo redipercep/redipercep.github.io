@@ -24,6 +24,7 @@ export function deriveTitle(content: string) {
             l
                 .replace(/!\[[^\]]*]\([^)]*\)/g, '')
                 .replace(/(🛫|📅|🔄|⏸\uFE0F?|✅)\s*\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2})?/gu, '')
+                .replace(/🔗\s*[A-Za-z0-9][A-Za-z0-9-]{5,}/gu, '')
                 .replace(/^[\s#>*\-+]+|\[[ xX/-]]\s*/g, '')
                 .trim(),
         )

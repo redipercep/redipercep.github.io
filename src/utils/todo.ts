@@ -4,7 +4,7 @@
  *   - [ ] 대기          - [/] 진행중          - [x] 완료          - [-] 보류
  *   - [/] 보고서 작성 🛫 2026-09-30 📅 2026-10-02 🔄 2026-09-30 10:20
  *
- *   🛫 시작일 · 📅 마감일 · 🔄 진행 시각 · ⏸️ 보류 시각 · ✅ 완료 시각
+ *   🛫 시작일 · 📅 마감일 · 🔄 진행 시각 · ⏸️ 보류 시각 · ✅ 완료 시각 · 🔗 연결된 메모 ID
  *
  * 들여쓴 항목은 하위 항목이 된다. 본문에 모두 들어 있으므로 백업·복사해도 정보가 유지된다.
  */
@@ -29,6 +29,7 @@ export interface Task {
     progressAt?: string;    // YYYY-MM-DD HH:mm
     holdAt?: string;
     doneAt?: string;
+    links: string[];        // 연결된 메모 uid
     notes: string[];        // 항목 아래 들여쓴 설명 줄
     children: Task[];
     parent: Task | null;
@@ -45,6 +46,7 @@ export interface ParsedTodo {
 
 const LIST_RE = /^([ \t]*)([-*+]|\d{1,9}[.)])(?:[ \t]+|$)(?:\[([ xX/-])\](?:[ \t]+|$))?(.*)$/;
 const TOKEN_RE = /[ \t]*(🛫|📅|🔄|⏸\uFE0F?|✅)[ \t]*(\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2})?)/gu;
+const LINK_RE = /[ \t]*🔗[ \t]*([A-Za-z0-9][A-Za-z0-9-]{5,})/gu;
 const FENCE_RE = /^[ \t]*(```|~~~)/;
 
 // ─── 날짜 ─────────────────────────────────────────
@@ -79,6 +81,7 @@ function parseLine(raw: string, line: number): Task | null {
         hasBox: m[3] !== undefined,
         status: CHAR_STATUS[m[3] ?? ' '],
         text: '',
+        links: [],
         notes: [],
         children: [],
         parent: null,
@@ -92,6 +95,10 @@ function parseLine(raw: string, line: number): Task | null {
             else if (key === '🔄') t.progressAt = v;
             else if (key === '✅') t.doneAt = v;
             else t.holdAt = v;
+            return '';
+        })
+        .replace(LINK_RE, (_all, uid: string) => {
+            if (!t.links.includes(uid)) t.links.push(uid);
             return '';
         })
         .trim();
@@ -172,6 +179,7 @@ function serialize(t: Task) {
         t.progressAt && `🔄 ${t.progressAt}`,
         t.holdAt && `⏸️ ${t.holdAt}`,
         t.doneAt && `✅ ${t.doneAt}`,
+        ...t.links.map(uid => `🔗 ${uid}`),
     ].filter(Boolean);
     return `${t.lead}${t.bullet} [${STATUS_CHAR[t.status]}] ${[t.text, ...tokens].filter(Boolean).join(' ')}`.trimEnd();
 }
@@ -314,6 +322,29 @@ export function removeCompleted(content: string) {
         if (!dropping || (!t && !l.trim())) out.push(l);
     });
     return out.join('\n').replace(/\n{3,}/g, '\n\n');
+}
+
+/** 줄 번호로 항목을 찾되, 그사이 내용이 바뀌었으면 같은 문구의 항목을 찾는다 */
+const findTask = (p: ParsedTodo, line: number, text?: string) =>
+    p.tasks.find(t => t.line === line && (text === undefined || t.text === text)) ??
+    (text !== undefined ? p.tasks.find(t => t.text === text) : undefined);
+
+export function addTaskLink(content: string, line: number, uid: string, text?: string) {
+    return rewrite(content, (p, touch) => {
+        const t = findTask(p, line, text);
+        if (!t || t.links.includes(uid)) return;
+        t.links.push(uid);
+        touch(t);
+    });
+}
+
+export function removeTaskLink(content: string, line: number, uid: string) {
+    return rewrite(content, (p, touch) => {
+        const t = findTask(p, line);
+        if (!t) return;
+        t.links = t.links.filter(x => x !== uid);
+        touch(t);
+    });
 }
 
 export function todoStats(content: string, today = todayStr()) {
