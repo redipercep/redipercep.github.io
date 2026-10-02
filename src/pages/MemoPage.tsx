@@ -3,16 +3,18 @@ import {FiArrowDown, FiArrowUp, FiDownload, FiMoreVertical, FiPlus, FiSearch, Fi
 import ImageGallery from '../components/ImageGallery';
 import MemoCard from '../components/MemoCard';
 import MemoEditor from '../components/MemoEditor';
+import MemoPicker from '../components/MemoPicker';
+import {type LinkTarget, type TaskLinkApi, TaskLinkContext} from '../components/TaskLinkContext';
 import {deleteMemoWithImages, deleteImages, getAllMemos, importData, saveMemo} from '../db/memoDB';
 import type {Memo, MemoImage, MemoKind, SortDir, SortKey} from '../types/memo';
 import {exportBackup, readBackup} from '../utils/backup';
 import {copyText, newId} from '../utils/format';
 import {clearImageUrlCache, releaseImageUrls} from '../utils/image';
 import {categoryIcon, DAILY, presetsFor} from '../utils/presets';
-import {localDate, todayStr, toReportText} from '../utils/todo';
+import {addTaskLink, localDate, parseTodo, todayStr, toReportText} from '../utils/todo';
 
 type Tab = 'memos' | 'todos' | 'images';
-type EditorState = {memo: Memo | null; kind: MemoKind; preset?: string} | null;
+type EditorState = {memo: Memo | null; kind: MemoKind; preset?: string; linkTo?: LinkTarget} | null;
 
 const TABS: {id: Tab; label: string}[] = [
     {id: 'memos', label: '메모'},
@@ -72,6 +74,8 @@ const MemoPage: React.FC = () => {
     const [galleryKey, setGalleryKey] = useState(0);
     const [pendingImport, setPendingImport] = useState<{memos: Memo[]; images: MemoImage[]} | null>(null);
     const [toast, setToast] = useState<string | null>(null);
+    const [popupUids, setPopupUids] = useState<string[] | null>(null); // 할일에서 연 메모 팝업
+    const [picker, setPicker] = useState<LinkTarget | null>(null);
     const importRef = useRef<HTMLInputElement>(null);
 
     const reload = useCallback(async () => {
@@ -132,7 +136,7 @@ const MemoPage: React.FC = () => {
 
     // 이미지 보기에서 메모로 이동
     useEffect(() => {
-        if (focusId == null || tab !== 'memos') return;
+        if (focusId == null || tab === 'images') return;
         requestAnimationFrame(() => document.getElementById(`memo-${focusId}`)?.scrollIntoView({behavior: 'smooth', block: 'start'}));
         const t = setTimeout(() => setFocusId(null), 2500);
         return () => clearTimeout(t);
@@ -141,6 +145,12 @@ const MemoPage: React.FC = () => {
     // ─── 동작 ───────────────────────────────────────
     const handleSave = async (memo: Memo, removedImageIds: string[]) => {
         await saveMemo(memo);
+        // 할일 항목에서 만든 메모면 그 항목에 연결
+        const target = editor?.linkTo;
+        const todo = target && memos.find(m => m.id === target.todoId);
+        if (target && todo) {
+            await saveMemo({...todo, content: addTaskLink(todo.content, target.line, memo.uid, target.text), updatedAt: new Date().toISOString()});
+        }
         if (removedImageIds.length) {
             await deleteImages(removedImageIds);
             releaseImageUrls(removedImageIds);
@@ -188,6 +198,80 @@ const MemoPage: React.FC = () => {
         if (!window.confirm('댓글을 삭제할까요?')) return Promise.resolve();
         return persist({...memo, updatedAt: new Date().toISOString(), comments: memo.comments.filter(c => c.id !== commentId)});
     };
+
+    // ─── 할일 ↔ 메모 연결 ───────────────────────────
+    const memosByUid = useMemo(() => new Map(memos.filter(m => m.kind === 'memo').map(m => [m.uid, m])), [memos]);
+
+    /** 메모 uid → 이 메모가 연결된 할일 항목 (최근 할일 먼저, 같은 문구는 한 번만) */
+    const backlinks = useMemo(() => {
+        const map = new Map<string, {todo: Memo; text: string}[]>();
+        memos
+            .filter(m => m.kind === 'todo')
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+            .forEach(todo =>
+                parseTodo(todo.content).tasks.forEach(task =>
+                    task.links.forEach(uid => {
+                        const list = map.get(uid) ?? [];
+                        if (!list.some(x => x.text === task.text)) list.push({todo, text: task.text});
+                        map.set(uid, list);
+                    }),
+                ),
+            );
+        return map;
+    }, [memos]);
+
+    const linkApi = useMemo<TaskLinkApi>(
+        () => ({
+            memosByUid,
+            openMemos: uids => setPopupUids(uids),
+            createMemo: target => setEditor({memo: null, kind: 'memo', linkTo: target}),
+            pickMemo: target => setPicker(target),
+        }),
+        [memosByUid],
+    );
+
+    const linkExisting = async (target: LinkTarget, uid: string) => {
+        const todo = memos.find(m => m.id === target.todoId);
+        setPicker(null);
+        if (!todo) return;
+        await persist({...todo, content: addTaskLink(todo.content, target.line, uid, target.text), updatedAt: new Date().toISOString()});
+        showToast('메모를 연결했습니다');
+    };
+
+    const openTodo = (todoId: number) => {
+        setPopupUids(null);
+        changeTab('todos');
+        setFocusId(todoId);
+    };
+
+    const pickerTask = picker && parseTodo(memos.find(m => m.id === picker.todoId)?.content ?? '').tasks.find(t => t.line === picker.line);
+
+    const renderCard = (memo: Memo, highlight = false) => (
+        <MemoCard
+            key={memo.id}
+            memo={memo}
+            highlight={highlight}
+            activeTag={activeTag}
+            onEdit={m => setEditor({memo: m, kind: m.kind})}
+            onDelete={handleDelete}
+            onToggleFavorite={toggleFavorite}
+            onAddComment={addComment}
+            onEditComment={editComment}
+            onDeleteComment={removeComment}
+            onUpdateContent={updateContent}
+            onCopyReport={copyReport}
+            backlinks={backlinks.get(memo.uid)}
+            onOpenTodo={openTodo}
+            onTagClick={t => {
+                setPopupUids(null);
+                setActiveTag(activeTag === t ? null : t);
+            }}
+            onCategoryClick={c => {
+                setPopupUids(null);
+                setCategory(c);
+            }}
+        />
+    );
 
     const updateContent = (memo: Memo, content: string) => persist({...memo, content, updatedAt: new Date().toISOString()});
 
@@ -266,6 +350,7 @@ const MemoPage: React.FC = () => {
         `shrink-0 rounded-full px-3 py-1.5 text-sm ${active ? 'bg-gray-100 font-medium text-gray-900' : 'bg-gray-800 text-gray-300'}`;
 
     return (
+        <TaskLinkContext.Provider value={linkApi}>
         <div className="min-h-[100dvh] bg-gray-900 text-gray-200">
             {/* 상단: 탭 · 검색 · 필터 · 정렬 */}
             <header className="sticky top-0 z-30 border-b border-gray-800 bg-gray-900/95 pt-[env(safe-area-inset-top)] backdrop-blur">
@@ -390,24 +475,7 @@ const MemoPage: React.FC = () => {
                     />
                 ) : visible.length ? (
                     <div className="space-y-3">
-                        {visible.map(memo => (
-                            <MemoCard
-                                key={memo.id}
-                                memo={memo}
-                                highlight={focusId === memo.id}
-                                activeTag={activeTag}
-                                onEdit={m => setEditor({memo: m, kind: m.kind})}
-                                onDelete={handleDelete}
-                                onToggleFavorite={toggleFavorite}
-                                onAddComment={addComment}
-                                onEditComment={editComment}
-                                onDeleteComment={removeComment}
-                                onUpdateContent={updateContent}
-                                onCopyReport={copyReport}
-                                onTagClick={t => setActiveTag(activeTag === t ? null : t)}
-                                onCategoryClick={c => setCategory(c)}
-                            />
-                        ))}
+                        {visible.map(memo => renderCard(memo, focusId === memo.id))}
                     </div>
                 ) : hasFilter ? (
                     <div className="py-16 text-center text-sm text-gray-500">
@@ -460,6 +528,8 @@ const MemoPage: React.FC = () => {
                     kind={editor.kind}
                     preset={editor.preset}
                     latestDaily={latestDaily}
+                    initialTitle={editor.linkTo?.text}
+                    linkNote={editor.linkTo?.text}
                     categories={countCategories(memos.filter(m => m.kind === editor.kind)).map(c => c.name)}
                     allTags={allTags}
                     onSave={handleSave}
@@ -502,7 +572,45 @@ const MemoPage: React.FC = () => {
             )}
 
             <input ref={importRef} type="file" accept="application/json,.json" hidden onChange={e => handleImportFile(e.target.files?.[0])} />
+
+            {/* 할일 항목에 연결된 메모 팝업 (편집기는 이 위에 열림) */}
+            {popupUids && (
+                <div className="fixed inset-0 z-[35] flex items-end justify-center bg-black/60 sm:items-center" onClick={() => setPopupUids(null)}>
+                    <div
+                        role="dialog"
+                        aria-label="연결된 메모"
+                        onClick={e => e.stopPropagation()}
+                        className="flex max-h-[90dvh] w-full flex-col rounded-t-2xl bg-gray-900 sm:max-w-2xl sm:rounded-2xl"
+                    >
+                        <div className="flex items-center border-b border-gray-800 px-4 py-2">
+                            <h2 className="flex-1 font-semibold text-gray-100">연결된 메모 {popupUids.length > 1 ? popupUids.length : ''}</h2>
+                            <button onClick={() => setPopupUids(null)} aria-label="닫기" className="-mr-2 rounded-full p-2 hover:bg-gray-800">
+                                <FiX size={20} />
+                            </button>
+                        </div>
+                        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+                            {popupUids.map(uid => memosByUid.get(uid)).filter((m): m is Memo => !!m).map(m => renderCard(m))}
+                            {!popupUids.some(uid => memosByUid.has(uid)) && <p className="py-8 text-center text-sm text-gray-500">메모가 삭제되었습니다.</p>}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {picker && (
+                <MemoPicker
+                    taskText={picker.text}
+                    memos={[...memosByUid.values()]}
+                    linked={pickerTask?.links ?? []}
+                    onPick={uid => linkExisting(picker, uid)}
+                    onCreate={() => {
+                        setPicker(null);
+                        setEditor({memo: null, kind: 'memo', linkTo: picker});
+                    }}
+                    onClose={() => setPicker(null)}
+                />
+            )}
         </div>
+        </TaskLinkContext.Provider>
     );
 };
 
