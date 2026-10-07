@@ -14,6 +14,7 @@ import {categoryIcon, DAILY, presetsFor} from '../utils/presets';
 import {addTaskLink, localDate, parseTodo, todayStr, toReportText} from '../utils/todo';
 
 type Tab = 'memos' | 'todos' | 'images';
+type ListView = 'compact' | 'full';
 type EditorState = {memo: Memo | null; kind: MemoKind; preset?: string; linkTo?: LinkTarget} | null;
 
 const TABS: {id: Tab; label: string}[] = [
@@ -67,8 +68,21 @@ const MemoPage: React.FC = () => {
     const [category, setCategory] = useState<string | null>(null);
     const [favoritesOnly, setFavoritesOnly] = useState(false);
     const [activeTag, setActiveTag] = useState<string | null>(null);
-    const [sortKey, setSortKey] = usePref<SortKey>('memo.sortKey', 'updatedAt');
-    const [sortDir, setSortDir] = usePref<SortDir>('memo.sortDir', 'desc');
+    // 정렬은 메모 / 할일 탭마다 따로 기억 (이미지 탭은 메모 탭 설정을 따름)
+    const [memoSortKey, setMemoSortKey] = usePref<SortKey>('memo.sortKey', 'updatedAt');
+    const [memoSortDir, setMemoSortDir] = usePref<SortDir>('memo.sortDir', 'desc');
+    const [todoSortKey, setTodoSortKey] = usePref<SortKey>('todo.sortKey', 'createdAt');
+    const [todoSortDir, setTodoSortDir] = usePref<SortDir>('todo.sortDir', 'desc');
+    const isTodoTab = tab === 'todos';
+    const sortKey = isTodoTab ? todoSortKey : memoSortKey;
+    const sortDir = isTodoTab ? todoSortDir : memoSortDir;
+    const setSortKey = isTodoTab ? setTodoSortKey : setMemoSortKey;
+    const setSortDir = isTodoTab ? setTodoSortDir : setMemoSortDir;
+    // 목록 보기(간략히 / 기본)도 탭마다 기억
+    const [memoView, setMemoView] = usePref<ListView>('memo.listView', 'full');
+    const [todoView, setTodoView] = usePref<ListView>('todo.listView', 'full');
+    const listView = isTodoTab ? todoView : memoView;
+    const setListView = isTodoTab ? setTodoView : setMemoView;
 
     const [focusId, setFocusId] = useState<number | null>(null);
     const [galleryKey, setGalleryKey] = useState(0);
@@ -246,11 +260,12 @@ const MemoPage: React.FC = () => {
 
     const pickerTask = picker && parseTodo(memos.find(m => m.id === picker.todoId)?.content ?? '').tasks.find(t => t.line === picker.line);
 
-    const renderCard = (memo: Memo, highlight = false) => (
+    const renderCard = (memo: Memo, highlight = false, compact = false) => (
         <MemoCard
             key={memo.id}
             memo={memo}
             highlight={highlight}
+            compact={compact}
             activeTag={activeTag}
             onEdit={m => setEditor({memo: m, kind: m.kind})}
             onDelete={handleDelete}
@@ -426,16 +441,16 @@ const MemoPage: React.FC = () => {
                         ))}
                     </div>
 
-                    {(activeTag || tab === 'memos') && (
+                    {(activeTag || tab !== 'images') && (
                         <div className="flex items-center gap-2 text-sm">
                             {activeTag && (
                                 <button onClick={() => setActiveTag(null)} className="flex items-center gap-1 rounded-full bg-indigo-500 px-2.5 py-1 text-white">
                                     #{activeTag} <FiX size={14} />
                                 </button>
                             )}
-                            {tab === 'memos' && (
+                            {tab !== 'images' && (
                                 <>
-                                    <span className="flex-1 text-gray-500">{visible.length}개</span>
+                                    <span className="min-w-0 flex-1 truncate text-gray-500">{visible.length}개</span>
                                     <select
                                         value={sortKey}
                                         onChange={e => setSortKey(e.target.value as SortKey)}
@@ -453,6 +468,18 @@ const MemoPage: React.FC = () => {
                                         {sortDir === 'asc' ? <FiArrowUp /> : <FiArrowDown />}
                                         {sortKey === 'title' ? (sortDir === 'asc' ? '가→하' : '하→가') : sortDir === 'asc' ? '오래된 순' : '최신 순'}
                                     </button>
+                                    <div role="group" aria-label="목록 보기" className="flex shrink-0 rounded-lg bg-gray-800 p-0.5">
+                                        {([['compact', '간략히'], ['full', '기본']] as const).map(([v, label]) => (
+                                            <button
+                                                key={v}
+                                                onClick={() => setListView(v)}
+                                                aria-pressed={listView === v}
+                                                className={`rounded-md px-2 py-1 ${listView === v ? 'bg-gray-600 font-medium text-white' : 'text-gray-400'}`}
+                                            >
+                                                {label}
+                                            </button>
+                                        ))}
+                                    </div>
                                 </>
                             )}
                         </div>
@@ -474,8 +501,8 @@ const MemoPage: React.FC = () => {
                         }}
                     />
                 ) : visible.length ? (
-                    <div className="space-y-3">
-                        {visible.map(memo => renderCard(memo, focusId === memo.id))}
+                    <div className={listView === 'compact' ? 'space-y-2' : 'space-y-3'}>
+                        {visible.map(memo => renderCard(memo, focusId === memo.id, listView === 'compact'))}
                     </div>
                 ) : hasFilter ? (
                     <div className="py-16 text-center text-sm text-gray-500">
