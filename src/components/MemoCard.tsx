@@ -1,5 +1,5 @@
 import React, {useEffect, useMemo, useState} from 'react';
-import {FiCopy, FiEdit2, FiMessageCircle, FiStar, FiTrash2} from 'react-icons/fi';
+import {FiChevronRight, FiCopy, FiEdit2, FiMessageCircle, FiStar, FiTrash2} from 'react-icons/fi';
 import type {Memo} from '../types/memo';
 import {formatDate} from '../utils/format';
 import {categoryChip, categoryIcon} from '../utils/presets';
@@ -11,6 +11,7 @@ import {todoStats} from '../utils/todo';
 interface Props {
     memo: Memo;
     highlight?: boolean;
+    compact?: boolean;      // 간략히: 제목만 보이고 눌러서 펼침
     activeTag: string | null;
     onEdit: (memo: Memo) => void;
     onDelete: (memo: Memo) => void;
@@ -27,41 +28,77 @@ interface Props {
 }
 
 const MemoCard: React.FC<Props> = ({
-    memo, highlight, activeTag, onEdit, onDelete, onToggleFavorite, onTagClick, onCategoryClick,
+    memo, highlight, compact = false, activeTag, onEdit, onDelete, onToggleFavorite, onTagClick, onCategoryClick,
     onAddComment, onEditComment, onDeleteComment, onUpdateContent, onCopyReport, backlinks = [], onOpenTodo,
 }) => {
     const isTodo = memo.kind === 'todo';
     const stats = useMemo(() => (isTodo ? todoStats(memo.content) : null), [isTodo, memo.content]);
     const [expanded, setExpanded] = useState(false);
     const [showComments, setShowComments] = useState(false);
+    const [open, setOpen] = useState(false); // 간략히 모드에서 펼침 여부
     const isLong = isTodo
         ? memo.content.split('\n').length > 20
         : memo.content.length > 220 || memo.content.split('\n').length > 8 || memo.imageIds.length > 0;
-    const collapsed = isLong && !expanded;
+    // 간략히 모드에서 펼친 글은 내용을 모두 보여준다
+    const collapsed = isLong && !expanded && !compact;
     const edited = memo.updatedAt.slice(0, 16) !== memo.createdAt.slice(0, 16);
 
     useEffect(() => {
-        if (highlight) setExpanded(true);
+        if (!highlight) return;
+        setExpanded(true);
+        setOpen(true);
     }, [highlight]);
+
+    const titleToggle = (
+        <button
+            type="button"
+            onClick={() => setOpen(v => !v)}
+            aria-expanded={open}
+            className="flex w-full items-start gap-2 text-left"
+        >
+            <FiChevronRight size={18} className={`mt-0.5 shrink-0 text-gray-500 transition-transform ${open ? 'rotate-90' : ''}`} />
+            <h2 className="min-w-0 flex-1 break-words text-base font-semibold leading-snug text-gray-50">{memo.title}</h2>
+        </button>
+    );
+
+    // 간략히 + 닫힘: 제목만
+    if (compact && !open) {
+        return (
+            <article id={`memo-${memo.id}`} className="scroll-mt-48 rounded-lg bg-gray-800 px-4 py-3 ring-1 ring-gray-700/60">
+                {titleToggle}
+            </article>
+        );
+    }
+
+    const categoryButton = memo.category && (
+        <button
+            onClick={() => onCategoryClick(memo.category)}
+            className={`${compact ? 'ml-[26px] mt-2' : 'mb-1'} rounded-full px-2 py-0.5 text-xs ${categoryChip(memo.category)}`}
+        >
+            {categoryIcon(memo.category)} {memo.category}
+        </button>
+    );
 
     return (
         <article
             id={`memo-${memo.id}`}
-            className={`scroll-mt-48 rounded-xl bg-gray-800 p-4 ring-1 transition-shadow ${highlight ? 'ring-2 ring-emerald-400' : 'ring-gray-700/60'}`}
+            className={`scroll-mt-48 bg-gray-800 ring-1 transition-shadow ${compact ? 'rounded-lg px-4 py-3' : 'rounded-xl p-4'} ${highlight ? 'ring-2 ring-emerald-400' : 'ring-gray-700/60'}`}
         >
             <div className="flex items-start gap-2">
                 <div className="min-w-0 flex-1">
-                    {memo.category && (
-                        <button
-                            onClick={() => onCategoryClick(memo.category)}
-                            className={`mb-1 rounded-full px-2 py-0.5 text-xs ${categoryChip(memo.category)}`}
-                        >
-                            {categoryIcon(memo.category)} {memo.category}
-                        </button>
+                    {compact ? (
+                        <>
+                            {titleToggle}
+                            {categoryButton}
+                        </>
+                    ) : (
+                        <>
+                            {categoryButton}
+                            <h2 className="break-words text-base font-semibold leading-snug text-gray-50">{memo.title}</h2>
+                        </>
                     )}
-                    <h2 className="break-words text-base font-semibold leading-snug text-gray-50">{memo.title}</h2>
                     {stats && stats.total > 0 && (
-                        <div className="mt-1.5 flex items-center gap-2 text-xs text-gray-400">
+                        <div className={`mt-1.5 flex items-center gap-2 text-xs text-gray-400 ${compact ? 'ml-[26px]' : ''}`}>
                             <div className="h-1.5 w-24 overflow-hidden rounded-full bg-gray-700">
                                 <div className="h-full rounded-full bg-emerald-500" style={{width: `${(stats.done / stats.total) * 100}%`}} />
                             </div>
@@ -87,7 +124,7 @@ const MemoCard: React.FC<Props> = ({
                     {collapsed && <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-gray-800 to-transparent" />}
                 </div>
             )}
-            {isLong && (
+            {isLong && !compact && (
                 <button onClick={() => setExpanded(v => !v)} className="mt-1 py-1 text-sm font-medium text-emerald-400">
                     {expanded ? '접기' : '전체 보기'}
                 </button>
