@@ -1,4 +1,5 @@
 import type {MemoKind} from '../types/memo';
+import {rootOf} from './folders';
 
 export interface Preset {
     name: string;
@@ -38,8 +39,11 @@ export const TODO_PRESETS: Preset[] = [
 
 export const presetsFor = (kind: MemoKind) => (kind === 'todo' ? TODO_PRESETS : MEMO_PRESETS);
 
+/** 최상위 폴더 이름으로 프리셋을 찾는다 ("업무/회의" → 업무) */
 export const findPreset = (category: string, kind?: MemoKind) =>
-    (kind ? presetsFor(kind) : [...MEMO_PRESETS, ...TODO_PRESETS]).find(p => p.name === category);
+    (kind ? presetsFor(kind) : [...MEMO_PRESETS, ...TODO_PRESETS]).find(p => p.name === rootOf(category));
+
+export const isDaily = (category: string) => rootOf(category) === DAILY;
 
 export const isTemplate = (content: string, kind: MemoKind) =>
     !content.trim() || presetsFor(kind).some(p => p.template.trim() === content.trim());

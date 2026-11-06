@@ -1,6 +1,7 @@
-import {getAllImages, getAllMemos} from '../db/memoDB';
+import {type FolderMap, getAllImages, getAllMemos, getFolderMap} from '../db/memoDB';
 import type {BackupFile, Memo, MemoImage} from '../types/memo';
 import {fileStamp, newId} from './format';
+import {normalizePath} from './folders';
 import {downloadBlob, extractImageIds} from './image';
 
 function blobToDataUrl(blob: Blob) {
@@ -23,12 +24,13 @@ function dataUrlToBlob(dataUrl: string) {
 
 /** 메모 + 이미지를 JSON 한 파일로 내보내기 */
 export async function exportBackup() {
-    const [memos, images] = await Promise.all([getAllMemos(), getAllImages()]);
+    const [memos, images, folders] = await Promise.all([getAllMemos(), getAllImages(), getFolderMap()]);
     const data: BackupFile = {
         app: 'memo-app',
         version: 1,
         exportedAt: new Date().toISOString(),
         memos,
+        folders,
         images: await Promise.all(
             images.map(async img => ({
                 id: img.id,
@@ -67,7 +69,7 @@ function normalizeMemo(r: Raw): Memo {
         uid: str(r.uid) || newId(),
         kind: r.kind === 'todo' ? 'todo' : 'memo',
         title: str(r.title) || '제목 없음',
-        category: str(r.category),
+        category: normalizePath(str(r.category)),
         content,
         hashtags: Array.isArray(r.hashtags)
             ? r.hashtags.filter((t): t is string => typeof t === 'string' && t.trim() !== '')
@@ -80,7 +82,7 @@ function normalizeMemo(r: Raw): Memo {
     };
 }
 
-export async function readBackup(file: File): Promise<{memos: Memo[]; images: MemoImage[]}> {
+export async function readBackup(file: File): Promise<{memos: Memo[]; images: MemoImage[]; folders: Partial<FolderMap>}> {
     let json: unknown;
     try {
         json = JSON.parse(await file.text());
@@ -105,5 +107,9 @@ export async function readBackup(file: File): Promise<{memos: Memo[]; images: Me
             };
         });
 
-    return {memos: (rawMemos as Raw[]).filter(Boolean).map(normalizeMemo), images};
+    const rawFolders = (obj?.folders ?? {}) as Raw;
+    const folderList = (v: unknown) => (Array.isArray(v) ? v.filter((p): p is string => typeof p === 'string') : []);
+    const folders = {memo: folderList(rawFolders.memo), todo: folderList(rawFolders.todo)};
+
+    return {memos: (rawMemos as Raw[]).filter(Boolean).map(normalizeMemo), images, folders};
 }
