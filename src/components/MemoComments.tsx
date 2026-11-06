@@ -1,14 +1,16 @@
 import React, {useLayoutEffect, useMemo, useRef, useState} from 'react';
-import {FiChevronLeft, FiChevronRight, FiEdit2, FiSend, FiTrash2} from 'react-icons/fi';
+import {FiEdit2, FiSend, FiTrash2} from 'react-icons/fi';
 import type {MemoComment} from '../types/memo';
 import {formatDate} from '../utils/format';
 import MarkdownView from './MarkdownView';
+import Pager from './Pager';
 
 interface Props {
     comments: MemoComment[];
     onAdd: (content: string) => Promise<void>;
     onEdit: (commentId: string, content: string) => Promise<void>;
     onDelete: (commentId: string) => Promise<void>;
+    pageSize?: number;      // 한 번에 보이는 댓글 수 (설정)
 }
 
 /** 내용에 맞춰 높이가 늘어나는 입력창 */
@@ -26,37 +28,7 @@ const AutoTextarea: React.FC<React.TextareaHTMLAttributes<HTMLTextAreaElement>> 
 const inputClass =
     'min-w-0 flex-1 resize-none rounded-lg bg-gray-900 px-3 py-2 text-base leading-relaxed text-gray-200 outline-none placeholder:text-gray-500 focus:ring-2 focus:ring-emerald-500 sm:text-sm';
 
-const PAGE_SIZE = 5;
-
-/** 페이지 번호: 현재 페이지 주변으로 최대 5개 */
-const Pager: React.FC<{page: number; count: number; onPage: (p: number) => void}> = ({page, count, onPage}) => {
-    const start = Math.max(0, Math.min(page - 2, count - 5));
-    const pages = Array.from({length: Math.min(5, count)}, (_, i) => start + i);
-    const btn = 'flex h-8 min-w-8 items-center justify-center rounded-lg px-1.5 text-sm';
-    return (
-        <nav aria-label="댓글 페이지" className="flex items-center gap-0.5">
-            <button onClick={() => onPage(page - 1)} disabled={page === 0} aria-label="최신 댓글 쪽으로" className={`${btn} text-gray-400 hover:bg-gray-700 disabled:opacity-30`}>
-                <FiChevronLeft />
-            </button>
-            {pages.map(p => (
-                <button
-                    key={p}
-                    onClick={() => onPage(p)}
-                    aria-label={`${p + 1}페이지`}
-                    aria-current={p === page ? 'page' : undefined}
-                    className={`${btn} ${p === page ? 'bg-gray-600 font-semibold text-white' : 'text-gray-400 hover:bg-gray-700'}`}
-                >
-                    {p + 1}
-                </button>
-            ))}
-            <button onClick={() => onPage(page + 1)} disabled={page >= count - 1} aria-label="이전 댓글 쪽으로" className={`${btn} text-gray-400 hover:bg-gray-700 disabled:opacity-30`}>
-                <FiChevronRight />
-            </button>
-        </nav>
-    );
-};
-
-const MemoComments: React.FC<Props> = ({comments, onAdd, onEdit, onDelete}) => {
+const MemoComments: React.FC<Props> = ({comments, onAdd, onEdit, onDelete, pageSize: PAGE_SIZE = 5}) => {
     // 최신 댓글이 위로
     const sorted = useMemo(() => [...comments].sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [comments]);
     const [paging, setPaging] = useState(false); // 더보기를 눌러 페이지 이동 중
@@ -198,7 +170,7 @@ const MemoComments: React.FC<Props> = ({comments, onAdd, onEdit, onDelete}) => {
                     <span className="hidden text-xs text-gray-500 min-[400px]:inline">
                         {current * PAGE_SIZE + 1}–{Math.min(sorted.length, current * PAGE_SIZE + PAGE_SIZE)} / {sorted.length}
                     </span>
-                    <Pager page={current} count={pageCount} onPage={p => setPage(Math.max(0, Math.min(pageCount - 1, p)))} />
+                    <Pager label="댓글 페이지" page={current} count={pageCount} onPage={setPage} />
                 </div>
             )}
         </div>

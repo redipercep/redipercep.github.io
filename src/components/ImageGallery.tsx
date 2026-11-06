@@ -3,11 +3,13 @@ import {FiChevronLeft, FiChevronRight, FiDownload, FiFileText, FiShare2, FiX} fr
 import {getAllImages} from '../db/memoDB';
 import type {Memo, MemoImage} from '../types/memo';
 import {downloadBlob, downloadName, useImageUrl} from '../utils/image';
+import Pager from './Pager';
 
 interface Props {
     memos: Memo[];          // 현재 검색·필터 결과 (이 메모들의 이미지만 표시)
     refreshKey: number;
     onOpenMemo: (memoId: number) => void;
+    pageSize?: number;
 }
 
 interface Entry {
@@ -109,9 +111,10 @@ const Viewer: React.FC<{entries: Entry[]; index: number; onIndex: (i: number) =>
     );
 };
 
-const ImageGallery: React.FC<Props> = ({memos, refreshKey, onOpenMemo}) => {
+const ImageGallery: React.FC<Props> = ({memos, refreshKey, onOpenMemo, pageSize = 60}) => {
     const [images, setImages] = useState<Map<string, MemoImage> | null>(null);
     const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+    const [page, setPage] = useState(0);
 
     useEffect(() => {
         getAllImages().then(list => setImages(new Map(list.map(i => [i.id, i]))));
@@ -124,6 +127,11 @@ const ImageGallery: React.FC<Props> = ({memos, refreshKey, onOpenMemo}) => {
             memo.imageIds.map(id => images.get(id)).filter((i): i is MemoImage => !!i).map(image => ({image, memo})),
         );
     }, [images, memos]);
+
+    // 필터가 바뀌어 개수가 줄면 마지막 페이지로
+    const pageCount = Math.max(1, Math.ceil(entries.length / pageSize));
+    const current = Math.min(page, pageCount - 1);
+    const start = current * pageSize;
 
     if (!images) return <p className="py-10 text-center text-gray-500">불러오는 중…</p>;
     if (!entries.length) {
@@ -139,10 +147,22 @@ const ImageGallery: React.FC<Props> = ({memos, refreshKey, onOpenMemo}) => {
     return (
         <>
             <p className="mb-2 text-sm text-gray-500">이미지 {entries.length}개 — 눌러서 크게 보고 저장할 수 있어요</p>
-            <div className="grid grid-cols-3 gap-1 sm:grid-cols-4 md:grid-cols-5">
-                {entries.map((e, i) => (
-                    <Thumb key={`${e.memo.id}-${e.image.id}`} image={e.image} onClick={() => setViewerIndex(i)} />
+            <div className="grid grid-cols-3 gap-1 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
+                {entries.slice(start, start + pageSize).map((e, i) => (
+                    <Thumb key={`${e.memo.id}-${e.image.id}`} image={e.image} onClick={() => setViewerIndex(start + i)} />
                 ))}
+            </div>
+            <div className="mt-4 flex justify-center">
+                <Pager
+                    label="이미지 페이지"
+                    page={current}
+                    count={pageCount}
+                    edges
+                    onPage={p => {
+                        setPage(p);
+                        window.scrollTo({top: 0});
+                    }}
+                />
             </div>
             {viewerIndex != null && entries[viewerIndex] && (
                 <Viewer

@@ -3,14 +3,16 @@ import {FaHeading, FaQuoteLeft} from 'react-icons/fa';
 import {MdFormatIndentDecrease, MdFormatIndentIncrease} from 'react-icons/md';
 import {
     FiBold, FiCheckSquare, FiChevronDown, FiCode, FiColumns, FiEdit3, FiEye,
-    FiHelpCircle, FiImage, FiItalic, FiLink, FiList, FiStar, FiX,
+    FiFolder, FiHelpCircle, FiImage, FiItalic, FiLink, FiList, FiStar, FiX,
 } from 'react-icons/fi';
 import {addImage, deleteImages} from '../db/memoDB';
 import type {Memo, MemoKind} from '../types/memo';
 import {deriveTitle, newId} from '../utils/format';
 import {extractImageIds, IMG_PROTOCOL, prepareImage, releaseImageUrls} from '../utils/image';
-import {categoryChip, DAILY, findPreset, isTemplate, presetsFor} from '../utils/presets';
+import {normalizePath, pathLabel} from '../utils/folders';
+import {categoryChip, categoryIcon, DAILY, findPreset, isDaily, isTemplate, presetsFor} from '../utils/presets';
 import {dailyTitle, normalizeTodo, removeCompleted, todayStr} from '../utils/todo';
+import FolderPicker from './FolderPicker';
 import MarkdownHelp from './MarkdownHelp';
 import MarkdownView from './MarkdownView';
 import TodoView from './TodoView';
@@ -24,7 +26,9 @@ interface Props {
     latestDaily?: Memo | null;  // 가장 최근 일일업무 (새 일일업무의 바탕)
     initialTitle?: string;      // 새 글의 기본 제목 (할일에서 메모를 만들 때)
     linkNote?: string;          // 저장 시 연결될 할일 안내
-    categories: string[];
+    initialFolder?: string;     // 새 글의 기본 폴더 (지금 보고 있는 폴더)
+    folders: string[];          // 고를 수 있는 전체 폴더
+    frequentFolders: string[];  // 자주 쓰는 폴더 (빠른 선택)
     allTags: string[];
     onSave: (memo: Memo, removedImageIds: string[]) => Promise<void>;
     onClose: () => void;
@@ -33,14 +37,14 @@ interface Props {
 const VIEW_KEY = 'memo.editorView';
 const normalizeTag = (t: string) => t.trim().replace(/^#+/, '').replace(/[,\s]+/g, '');
 
-const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTitle, linkNote, categories, allTags, onSave, onClose}) => {
+const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTitle, linkNote, initialFolder, folders, frequentFolders, allTags, onSave, onClose}) => {
     const isTodo = kind === 'todo';
     const presetInfo = preset ? findPreset(preset, kind) : undefined;
     // 새 일일업무: 오늘 날짜 제목 + 가장 최근 일일업무 내용을 이어받음
     const dailyInit = isTodo && !memo && preset === DAILY;
     const initial = useRef({
         title: memo?.title ?? initialTitle ?? (dailyInit ? dailyTitle() : ''),
-        category: memo?.category ?? preset ?? '',
+        category: memo?.category ?? preset ?? initialFolder ?? '',
         content: memo?.content ?? (dailyInit && latestDaily ? latestDaily.content : presetInfo?.template ?? ''),
         tags: memo?.hashtags ?? [],
         isFavorite: memo?.isFavorite ?? false,
@@ -62,6 +66,7 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTi
     const [showMeta, setShowMeta] = useState(!memo && !preset);
     const [showHelp, setShowHelp] = useState(false);
     const [carriedFrom, setCarriedFrom] = useState<string | null>(dailyInit && latestDaily ? latestDaily.title : null);
+    const [folderPickerOpen, setFolderPickerOpen] = useState(false);
     const [saving, setSaving] = useState(false);
     const [uploading, setUploading] = useState(false);
 
@@ -69,8 +74,8 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTi
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const fileRef = useRef<HTMLInputElement>(null);
 
-    const chipCategories = [...new Set([...presetsFor(kind).map(p => p.name), ...categories])];
-    const [customCategory, setCustomCategory] = useState(chipCategories.includes(initial.category) ? '' : initial.category);
+    // 빠른 선택: 기본 폴더(템플릿) + 자주 쓰는 폴더
+    const quickFolders = [...new Set([...presetsFor(kind).map(p => p.name), ...frequentFolders])].slice(0, 10);
 
     // 편집기가 열려 있는 동안 뒤 화면 스크롤 방지
     useEffect(() => {
@@ -208,12 +213,11 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTi
     };
 
     // ─── 카테고리 · 태그 ─────────────────────────────
-    const pickCategory = (name: string) => {
-        const next = category === name ? '' : name;
+    const pickCategory = (name: string, toggle = true) => {
+        const next = toggle && category === name ? '' : normalizePath(name);
         setCategory(next);
-        setCustomCategory('');
         if (!isTemplate(content, kind)) return; // 이미 작성한 내용은 건드리지 않음
-        if (isTodo && !memo && next === DAILY) {
+        if (isTodo && !memo && isDaily(next)) {
             if (!title.trim()) setTitle(dailyTitle());
             setContent(latestDaily?.content ?? findPreset(DAILY, kind)?.template ?? '');
             setCarriedFrom(latestDaily?.title ?? null);
@@ -247,8 +251,8 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTi
             id: memo?.id,
             uid: memo?.uid ?? newId(),
             kind,
-            title: title.trim() || (isTodo && category.trim() === DAILY ? dailyTitle() : deriveTitle(finalContent)),
-            category: category.trim(),
+            title: title.trim() || (isTodo && isDaily(category) ? dailyTitle() : deriveTitle(finalContent)),
+            category: normalizePath(category),
             content: finalContent,
             hashtags: pendingTag && !tags.includes(pendingTag) ? [...tags, pendingTag] : tags,
             imageIds,
@@ -303,7 +307,7 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTi
         {mode: 'preview', label: '미리보기만', icon: <FiEye />},
     ];
 
-    const metaSummary = [category, ...tags.map(t => `#${t}`)].filter(Boolean).join(' ') || '카테고리 · 태그';
+    const metaSummary = [category && `📁 ${pathLabel(category)}`, ...tags.map(t => `#${t}`)].filter(Boolean).join(' ') || '폴더 · 태그';
 
     return (
         <div className="fixed inset-0 z-40 flex h-[100dvh] flex-col bg-gray-900 text-gray-200">
@@ -353,26 +357,25 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTi
                 {showMeta && (
                     <div className="space-y-2 pb-1">
                         <div className="-mx-3 flex gap-1.5 overflow-x-auto px-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                            {chipCategories.map(name => (
+                            <button
+                                onClick={() => setFolderPickerOpen(true)}
+                                className={`flex max-w-[60%] shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-sm ring-1 ${
+                                    category ? `${categoryChip(category)} ring-emerald-400` : 'bg-gray-800 text-gray-300 ring-gray-600'
+                                }`}
+                            >
+                                <FiFolder className="shrink-0" />
+                                <span className="truncate">{category ? pathLabel(category) : '폴더 선택'}</span>
+                                <FiChevronDown className="shrink-0" />
+                            </button>
+                            {quickFolders.filter(f => f !== category).map(name => (
                                 <button
                                     key={name}
                                     onClick={() => pickCategory(name)}
-                                    className={`shrink-0 rounded-full px-3 py-1 text-sm ${
-                                        category === name ? `${categoryChip(name)} ring-2 ring-emerald-400` : 'bg-gray-800 text-gray-400'
-                                    }`}
+                                    className="shrink-0 rounded-full bg-gray-800 px-3 py-1 text-sm text-gray-400"
                                 >
-                                    {findPreset(name)?.icon} {name}
+                                    {categoryIcon(name)} {pathLabel(name)}
                                 </button>
                             ))}
-                            <input
-                                value={customCategory}
-                                onChange={e => {
-                                    setCustomCategory(e.target.value);
-                                    setCategory(e.target.value);
-                                }}
-                                placeholder="+ 새 카테고리"
-                                className="w-32 shrink-0 rounded-full bg-gray-800 px-3 py-1 text-base outline-none placeholder:text-gray-500 focus:ring-2 focus:ring-emerald-400 sm:text-sm"
-                            />
                         </div>
 
                         <div className="flex flex-wrap items-center gap-1.5">
@@ -498,6 +501,19 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTi
 
             <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={e => handleFiles(e.target.files)} />
             {showHelp && <MarkdownHelp kind={kind} onClose={() => setShowHelp(false)} />}
+            {folderPickerOpen && (
+                <FolderPicker
+                    title="폴더 선택"
+                    folders={folders}
+                    current={category}
+                    confirmLabel="선택"
+                    onClose={() => setFolderPickerOpen(false)}
+                    onConfirm={path => {
+                        setFolderPickerOpen(false);
+                        pickCategory(path, false);
+                    }}
+                />
+            )}
         </div>
     );
 };
