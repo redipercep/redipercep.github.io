@@ -47,4 +47,5 @@ export interface BackupFile {
     exportedAt: string;
     memos: Memo[];
     images: BackupImage[];
+    folders?: {memo: string[]; todo: string[]};  // 빈 폴더까지 옮기기 위한 폴더 목록
 }
