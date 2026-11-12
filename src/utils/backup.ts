@@ -1,8 +1,9 @@
-import {type FolderMap, getAllImages, getAllMemos, getFolderMap} from '../db/memoDB';
+import {type FolderMap, getAllImages, getFolderMap, getRawMemos, getVaultRecords} from '../db/memoDB';
 import type {BackupFile, Memo, MemoImage} from '../types/memo';
 import {fileStamp, newId} from './format';
 import {normalizePath} from './folders';
 import {downloadBlob, extractImageIds} from './image';
+import type {Sealed, VaultRecord} from './vault';
 
 function blobToDataUrl(blob: Blob) {
     return new Promise<string>((resolve, reject) => {
@@ -24,13 +25,15 @@ function dataUrlToBlob(dataUrl: string) {
 
 /** 메모 + 이미지를 JSON 한 파일로 내보내기 */
 export async function exportBackup() {
-    const [memos, images, folders] = await Promise.all([getAllMemos(), getAllImages(), getFolderMap()]);
+    // 잠근 글과 그 이미지는 암호화된 그대로 내보낸다
+    const [memos, images, folders, vaults] = await Promise.all([getRawMemos(), getAllImages(), getFolderMap(), getVaultRecords()]);
     const data: BackupFile = {
         app: 'memo-app',
         version: 1,
         exportedAt: new Date().toISOString(),
         memos,
         folders,
+        vaults,
         images: await Promise.all(
             images.map(async img => ({
                 id: img.id,
@@ -38,6 +41,7 @@ export async function exportBackup() {
                 type: img.type,
                 createdAt: img.createdAt,
                 dataUrl: await blobToDataUrl(img.blob),
+                ...(img.enc ? {enc: img.enc} : {}),
             })),
         ),
     };
@@ -46,12 +50,16 @@ export async function exportBackup() {
 }
 
 type Raw = Record<string, unknown>;
+const strList = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+const isSealedValue = (v: unknown): v is Sealed =>
+    !!v && typeof (v as Raw).v === 'string' && typeof (v as Raw).iv === 'string' && typeof (v as Raw).data === 'string';
 const str = (v: unknown, fallback = '') => (typeof v === 'string' ? v : fallback);
 
 /** 이전 버전(댓글 포함) 형식도 받아들이도록 정규화 */
 function normalizeMemo(r: Raw): Memo {
     const now = new Date().toISOString();
     const content = str(r.content);
+    const locked = r.isLocked === true && isSealedValue(r.sealed);
     const comments = Array.isArray(r.comments)
         ? (r.comments as Raw[])
               .filter(c => c && !c.isDeleted && str(c.content))
@@ -74,15 +82,18 @@ function normalizeMemo(r: Raw): Memo {
         hashtags: Array.isArray(r.hashtags)
             ? r.hashtags.filter((t): t is string => typeof t === 'string' && t.trim() !== '')
             : [],
-        imageIds: extractImageIds(content),
+        // 잠근 글은 본문이 암호문이라 이미지 목록을 저장된 값으로 유지
+        imageIds: locked ? strList(r.imageIds) : extractImageIds(content),
         isFavorite: r.isFavorite === true,
+        isHidden: r.isHidden === true,
+        ...(locked ? {isLocked: true, sealed: r.sealed as Sealed} : {}),
         comments,
         createdAt: str(r.createdAt, now),
         updatedAt: str(r.updatedAt, str(r.createdAt, now)),
     };
 }
 
-export async function readBackup(file: File): Promise<{memos: Memo[]; images: MemoImage[]; folders: Partial<FolderMap>}> {
+export async function readBackup(file: File): Promise<{memos: Memo[]; images: MemoImage[]; folders: Partial<FolderMap>; vaults: VaultRecord[]}> {
     let json: unknown;
     try {
         json = JSON.parse(await file.text());
@@ -104,6 +115,9 @@ export async function readBackup(file: File): Promise<{memos: Memo[]; images: Me
                 type: str(i.type, blob.type),
                 createdAt: str(i.createdAt, new Date().toISOString()),
                 blob,
+                ...(i.enc && typeof (i.enc as Raw).v === 'string' && typeof (i.enc as Raw).iv === 'string'
+                    ? {enc: {v: (i.enc as Raw).v as string, iv: (i.enc as Raw).iv as string}}
+                    : {}),
             };
         });
 
@@ -111,5 +125,9 @@ export async function readBackup(file: File): Promise<{memos: Memo[]; images: Me
     const folderList = (v: unknown) => (Array.isArray(v) ? v.filter((p): p is string => typeof p === 'string') : []);
     const folders = {memo: folderList(rawFolders.memo), todo: folderList(rawFolders.todo)};
 
-    return {memos: (rawMemos as Raw[]).filter(Boolean).map(normalizeMemo), images, folders};
+    const vaults = (Array.isArray(obj?.vaults) ? (obj.vaults as Raw[]) : []).filter(
+        (v): v is Raw & VaultRecord => !!v && typeof v.id === 'string' && typeof v.salt === 'string' && isSealedValue(v.check),
+    );
+
+    return {memos: (rawMemos as Raw[]).filter(Boolean).map(normalizeMemo), images, folders, vaults};
 }

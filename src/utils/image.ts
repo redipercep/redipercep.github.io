@@ -1,6 +1,7 @@
 import {useEffect, useState} from 'react';
 import {getImage} from '../db/memoDB';
 import type {MemoImage} from '../types/memo';
+import {openBytes, subscribeVault, toB64} from './vault';
 
 /** 본문에서 저장된 이미지를 가리키는 주소: ![설명](memo-img:이미지ID) */
 export const IMG_PROTOCOL = 'memo-img:';
@@ -14,9 +15,10 @@ export function getImageUrl(id: string): Promise<string | null> {
     let p = pending.get(id);
     if (!p) {
         p = getImage(id)
-            .then(img => {
-                if (!img) return null;
-                const url = URL.createObjectURL(img.blob);
+            .then(img => (img ? imageBlob(img) : null))
+            .then(blob => {
+                if (!blob) return null;
+                const url = URL.createObjectURL(blob);
                 urlCache.set(id, url);
                 return url;
             })
@@ -40,9 +42,25 @@ export function clearImageUrlCache() {
     urlCache.clear();
 }
 
+/** 이미지의 실제 바이트 (잠근 글의 이미지는 풀어서). 잠금을 풀지 않았으면 null */
+export async function imageBlob(img: MemoImage): Promise<Blob | null> {
+    if (!img.enc) return img.blob;
+    const bytes = await openBytes({v: img.enc.v, iv: img.enc.iv, data: toB64(await img.blob.arrayBuffer())});
+    return bytes ? new Blob([bytes], {type: img.type}) : null;
+}
+
+// 잠금 상태가 바뀌면 이미지를 다시 불러온다 (잠그면 풀어 둔 이미지 주소도 버림)
+let vaultEpoch = 0;
+subscribeVault(() => {
+    vaultEpoch++;
+    clearImageUrlCache();
+});
+
 /** undefined = 불러오는 중, null = 없음 */
 export function useImageUrl(id: string | null) {
     const [url, setUrl] = useState<string | null | undefined>(() => (id ? urlCache.get(id) : null));
+    const [epoch, setEpoch] = useState(vaultEpoch);
+    useEffect(() => subscribeVault(() => setEpoch(vaultEpoch)), []);
     useEffect(() => {
         if (!id) {
             setUrl(null);
@@ -53,7 +71,7 @@ export function useImageUrl(id: string | null) {
         return () => {
             alive = false;
         };
-    }, [id]);
+    }, [id, epoch]);
     return url;
 }
 

@@ -2,6 +2,8 @@ import {useCallback, useState} from 'react';
 import type {MemoKind, SortDir, SortKey} from '../types/memo';
 
 export type ListView = 'compact' | 'full';
+/** 편집기 들여쓰기 단축키 */
+export type IndentKeys = 'both' | 'ctrl' | 'tab' | 'off';
 
 /** 화면 표시 설정 — 기기마다 다를 수 있으므로 localStorage에 저장 (백업에는 포함하지 않음) */
 export interface Settings {
@@ -11,9 +13,14 @@ export interface Settings {
     imagePageSize: number;      // 이미지 한 페이지 개수
     commentPageSize: number;    // 댓글 한 번에 보기
     pcColumns: 1 | 2;           // PC 넓은 화면에서 기본 보기 카드 열 수
+    indentKeys: IndentKeys;
+    showLinkButton: boolean;    // 편집기·댓글의 '글 연결' 버튼 표시
+    autoLockMinutes: number;    // 비밀번호 잠금: 조작이 없으면 자동으로 잠금 (0 = 끄기)
+    lockOnHide: boolean;        // 다른 앱·탭으로 가면 바로 잠금
 }
 
 export const PAGE_SIZES = [10, 20, 30, 50];
+export const AUTO_LOCK_MINUTES = [0, 1, 5, 15, 30];
 export const IMAGE_PAGE_SIZES = [30, 60, 90];
 export const COMMENT_PAGE_SIZES = [3, 5, 10];
 export const SORT_LABELS: Record<SortKey, string> = {updatedAt: '수정일', createdAt: '작성일', title: '제목'};
@@ -43,6 +50,10 @@ function defaults(): Settings {
         imagePageSize: 60,
         commentPageSize: 5,
         pcColumns: 2,
+        indentKeys: 'both',
+        showLinkButton: true,
+        autoLockMinutes: 5,
+        lockOnHide: true,
     };
 }
 

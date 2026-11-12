@@ -1,3 +1,5 @@
+import {stripRefs} from './links';
+
 /**
  * 할일은 마크다운 목록으로 작성하고, 상태와 날짜도 본문에 함께 적는다.
  *
@@ -361,7 +363,8 @@ const asCode = (s: string) => (s.includes('`') ? `\`\` ${s} \`\`` : `\`${s}\``);
 
 /** 메신저 등에 붙여넣기 좋은 형태: 진행중 항목과 그 상위는 `코드`로 */
 export function toReportText(title: string, content: string) {
-    const lines: (string | null)[] = content.split('\n');
+    // 앱 안 링크는 글자만 남긴다 (메신저에 붙이면 열 수 없으므로)
+    const lines: (string | null)[] = stripRefs(content).split('\n');
     for (const t of parseTodo(content).tasks) {
         if (!t.text && !t.children.length) {
             lines[t.line] = null;

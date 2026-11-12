@@ -1,3 +1,5 @@
+import {stripRefs} from './links';
+
 export function formatDate(iso: string) {
     const d = new Date(iso);
     if (isNaN(d.getTime())) return '';
@@ -21,7 +23,7 @@ export function deriveTitle(content: string) {
     const line = content
         .split('\n')
         .map(l =>
-            l
+            stripRefs(l)
                 .replace(/!\[[^\]]*]\([^)]*\)/g, '')
                 .replace(/(🛫|📅|🔄|⏸\uFE0F?|✅)\s*\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2})?/gu, '')
                 .replace(/🔗\s*[A-Za-z0-9][A-Za-z0-9-]{5,}/gu, '')
