@@ -1,5 +1,8 @@
 import type {Memo, MemoImage, MemoKind} from '../types/memo';
 import {collectFolders, isInside, movePath, normalizePath, parentPath} from '../utils/folders';
+import {
+    createVaultRecord, fromB64, openBytes, openJSON, sealBytes, sealJSON, setOpened, toB64, tryOpen, type VaultRecord,
+} from '../utils/vault';
 
 const DB_NAME = 'memo-app';
 const DB_VERSION = 2;
@@ -79,12 +82,71 @@ function forPut(memo: Memo): Memo {
 }
 
 // ─── 메모 ──────────────────────────────────────────
-/** 예전에 저장된 데이터에 없는 필드를 기본값으로 채운다 */
-export const getAllMemos = () =>
-    run<Memo[]>(MEMOS, 'readonly', s => s.getAll()).then(list => list.map(m => ({...m, kind: m.kind ?? 'memo', comments: m.comments ?? []})));
+// 잠근 글은 이 경계에서 암호화·복호화한다 → 나머지 화면 코드는 평범한 글처럼 다룬다
+interface LockedPayload {
+    title: string;
+    content: string;
+    comments: Memo['comments'];
+    hashtags: string[];
+}
+export const LOCKED_TITLE = '🔒 잠긴 글';
 
-export const saveMemo = (memo: Memo) =>
-    run<IDBValidKey>(MEMOS, 'readwrite', s => s.put(forPut(memo))).then(key => key as number);
+/** 저장된 그대로 (잠근 글은 암호문 상태) — 백업·가져오기용 */
+export const getRawMemos = () => run<Memo[]>(MEMOS, 'readonly', s => s.getAll());
+
+async function decode(r: Memo): Promise<Memo> {
+    const m = {...r, kind: r.kind ?? 'memo', comments: r.comments ?? []} as Memo;
+    if (!m.isLocked || !m.sealed) return m;
+    const {sealed, ...rest} = m;
+    const p = await openJSON<LockedPayload>(sealed);
+    if (!p) return {...rest, title: LOCKED_TITLE, content: '', comments: [], hashtags: [], isSealed: true};
+    return {...rest, ...p, isSealed: false};
+}
+
+/** 예전에 저장된 데이터에 없는 필드를 기본값으로 채우고, 열 수 있는 잠근 글은 풀어서 돌려준다 */
+export const getAllMemos = async () => Promise.all((await getRawMemos()).map(decode));
+
+async function encode(memo: Memo): Promise<Memo> {
+    const {isSealed: _s, sealed: _old, ...m} = memo;
+    if (!m.isLocked) return m;
+    const sealed = await sealJSON({title: m.title, content: m.content, comments: m.comments, hashtags: m.hashtags} as LockedPayload);
+    return {...m, title: '', content: '', comments: [], hashtags: [], sealed};
+}
+
+/** 잠근 글의 이미지는 암호화, 잠금을 푼 글의 이미지는 원래대로 */
+async function syncImageLock(ids: string[], locked: boolean) {
+    for (const id of ids) {
+        const img = await getImage(id);
+        if (!img || !!img.enc === locked) continue;
+        const bytes = await img.blob.arrayBuffer();
+        if (locked) {
+            const s = await sealBytes(bytes);
+            await addImage({...img, blob: new Blob([fromB64(s.data)]), enc: {v: s.v, iv: s.iv}});
+        } else if (img.enc) {
+            const plain = await openBytes({v: img.enc.v, iv: img.enc.iv, data: toB64(bytes)});
+            if (!plain) continue; // 다른 비밀번호의 이미지 — 그대로 둔다
+            const {enc: _e, ...rest} = img;
+            await addImage({...rest, blob: new Blob([plain], {type: img.type})});
+        }
+    }
+}
+
+export async function saveMemo(memo: Memo): Promise<number> {
+    if (memo.isSealed) {
+        // 잠긴 채 보이는 글: 암호문은 그대로 두고 즐겨찾기·숨김·폴더만 저장
+        const id = memo.id;
+        if (id == null) throw new Error('잠긴 글은 새로 만들 수 없습니다');
+        await runMulti([MEMOS], tx => {
+            const st = tx.objectStore(MEMOS);
+            const g = st.get(id);
+            g.onsuccess = () => g.result && st.put({...g.result, isFavorite: memo.isFavorite, isHidden: memo.isHidden, category: memo.category});
+        });
+        return id;
+    }
+    const record = await encode(memo);
+    await syncImageLock(record.imageIds, !!record.isLocked);
+    return run<IDBValidKey>(MEMOS, 'readwrite', s => s.put(forPut(record))).then(key => key as number);
+}
 
 /** 메모와 그 메모의 이미지를 함께 삭제 */
 export const deleteMemoWithImages = (memo: Memo) =>
@@ -171,13 +233,29 @@ export const moveMemosTo = (ids: number[], kind: MemoKind, dest: string) => {
     return rewriteFolders(kind, m => (m.id != null && target.has(m.id) ? normalizePath(dest) : null), list => (dest ? [...list, dest] : list));
 };
 
+/** 여러 글의 표시 상태(숨김 등)를 한 번에 바꾼다. 내용 수정이 아니므로 수정일은 그대로 */
+export const updateMemos = (ids: number[], patch: Partial<Pick<Memo, 'isHidden' | 'isFavorite'>>) => {
+    const target = new Set(ids);
+    return runMulti([MEMOS], tx => {
+        const req = tx.objectStore(MEMOS).openCursor();
+        req.onsuccess = () => {
+            const cursor = req.result;
+            if (!cursor) return;
+            const m = cursor.value as Memo;
+            if (m.id != null && target.has(m.id)) cursor.update({...m, ...patch});
+            cursor.continue();
+        };
+    });
+};
+
 // ─── 가져오기 ──────────────────────────────────────
 /**
  * replace: 기존 데이터를 모두 지우고 교체
  * merge: uid가 같은 메모는 더 최근에 수정된 쪽을 남기고, 없는 메모는 추가
  */
-export async function importData(memos: Memo[], images: MemoImage[], mode: 'merge' | 'replace', folders?: Partial<FolderMap>) {
-    const existing = mode === 'merge' ? await getAllMemos() : [];
+export async function importData(memos: Memo[], images: MemoImage[], mode: 'merge' | 'replace', folders?: Partial<FolderMap>, vaults: VaultRecord[] = []) {
+    const localVaults = await getVaultRecords();
+    const existing = mode === 'merge' ? await getRawMemos() : [];
     const byUid = new Map(existing.map(m => [m.uid, m]));
     const neededImages = new Set<string>();
 
@@ -195,6 +273,12 @@ export async function importData(memos: Memo[], images: MemoImage[], mode: 'merg
         (['memo', 'todo'] as MemoKind[]).forEach(kind =>
             meta.put({key: folderKey(kind), value: collectFolders([...currentFolders[kind], ...(folders?.[kind] ?? [])], [])}),
         );
+        // 잠근 글을 열 수 있도록 금고(salt·확인값)도 합친다. 이 기기에 금고가 없으면 가져온 것을 기본으로
+        if (vaults.length) {
+            const merged = [...localVaults, ...vaults.filter(v => !localVaults.some(l => l.id === v.id))];
+            meta.put({key: VAULTS, value: merged});
+            if (!localVaults.length) meta.put({key: ACTIVE_VAULT, value: vaults[vaults.length - 1].id});
+        }
 
         for (const memo of memos) {
             const local = byUid.get(memo.uid);
@@ -212,3 +296,61 @@ export async function importData(memos: Memo[], images: MemoImage[], mode: 'merg
         images.filter(img => neededImages.has(img.id)).forEach(img => is.put(img));
     });
 }
+
+// ─── 비밀번호 잠금 ──────────────────────────────────
+const VAULTS = 'vaults';
+const ACTIVE_VAULT = 'vault:active';
+
+export const getVaultRecords = () =>
+    run<{key: string; value: VaultRecord[]} | undefined>(META, 'readonly', s => s.get(VAULTS)).then(r => r?.value ?? []);
+const getActiveVaultId = () =>
+    run<{key: string; value: string} | undefined>(META, 'readonly', s => s.get(ACTIVE_VAULT)).then(r => r?.value ?? null);
+const putMeta = (key: string, value: unknown) => run<IDBValidKey>(META, 'readwrite', s => s.put({key, value}));
+
+/** 처음 비밀번호 정하기 (정한 뒤 바로 열린 상태) */
+export async function setupPassword(password: string) {
+    const {record, key} = await createVaultRecord(password);
+    await putMeta(VAULTS, [...(await getVaultRecords()), record]);
+    await putMeta(ACTIVE_VAULT, record.id);
+    setOpened([{id: record.id, key}], record.id);
+}
+
+/** 잠금 풀기. 비밀번호가 맞는 금고가 하나도 없으면 false */
+export async function unlockWithPassword(password: string) {
+    const opened = await tryOpen(password, await getVaultRecords());
+    if (!opened.length) return false;
+    setOpened(opened, await getActiveVaultId());
+    return true;
+}
+
+/**
+ * 비밀번호 바꾸기: 새 금고를 만들고, 기존 비밀번호로 열리는 잠근 글·이미지를 모두 새 키로 다시 암호화.
+ * 다른 비밀번호로 잠긴 글(다른 기기에서 가져온 것 등)은 그대로 남는다.
+ */
+export async function changePassword(oldPassword: string, newPassword: string) {
+    const records = await getVaultRecords();
+    const opened = await tryOpen(oldPassword, records);
+    if (!opened.length) return false;
+    const {record, key} = await createVaultRecord(newPassword);
+    setOpened([...opened, {id: record.id, key}], record.id);
+    const oldIds = new Set(opened.map(o => o.id));
+
+    for (const raw of await getRawMemos()) {
+        if (!raw.isLocked || !raw.sealed || !oldIds.has(raw.sealed.v)) continue;
+        const plain = await decode(raw);
+        if (plain.isSealed) continue;
+        const rec = await encode(plain); // 새 금고 키로 다시 암호화
+        await run<IDBValidKey>(MEMOS, 'readwrite', s => s.put(forPut(rec)));
+    }
+    for (const img of await getAllImages()) {
+        if (!img.enc || !oldIds.has(img.enc.v)) continue;
+        const bytes = await openBytes({v: img.enc.v, iv: img.enc.iv, data: toB64(await img.blob.arrayBuffer())});
+        if (!bytes) continue;
+        const s = await sealBytes(bytes.buffer as ArrayBuffer);
+        await addImage({...img, blob: new Blob([fromB64(s.data)]), enc: {v: s.v, iv: s.iv}});
+    }
+    await putMeta(VAULTS, [...records.filter(r => !oldIds.has(r.id)), record]);
+    await putMeta(ACTIVE_VAULT, record.id);
+    return true;
+}
+
