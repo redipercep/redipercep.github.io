@@ -1,9 +1,9 @@
-import React, {useEffect, useRef, useState} from 'react';
+import React, {useContext, useEffect, useRef, useState} from 'react';
 import {FaHeading, FaQuoteLeft} from 'react-icons/fa';
 import {MdFormatIndentDecrease, MdFormatIndentIncrease} from 'react-icons/md';
 import {
     FiBold, FiCheckSquare, FiChevronDown, FiCode, FiColumns, FiEdit3, FiEye,
-    FiFolder, FiHelpCircle, FiImage, FiItalic, FiLink, FiList, FiStar, FiX,
+    FiFolder, FiHelpCircle, FiImage, FiItalic, FiLink, FiLink2, FiList, FiStar, FiX,
 } from 'react-icons/fi';
 import {addImage, deleteImages} from '../db/memoDB';
 import type {Memo, MemoKind} from '../types/memo';
@@ -11,10 +11,14 @@ import {deriveTitle, newId} from '../utils/format';
 import {extractImageIds, IMG_PROTOCOL, prepareImage, releaseImageUrls} from '../utils/image';
 import {normalizePath, pathLabel} from '../utils/folders';
 import {categoryChip, categoryIcon, DAILY, findPreset, isDaily, isTemplate, presetsFor} from '../utils/presets';
+import type {IndentKeys} from '../utils/settings';
+import {currentLine, isListLine, replaceWithUndo, shiftLines} from '../utils/textEdit';
 import {dailyTitle, normalizeTodo, removeCompleted, todayStr} from '../utils/todo';
 import FolderPicker from './FolderPicker';
 import MarkdownHelp from './MarkdownHelp';
 import MarkdownView from './MarkdownView';
+import {MemoLinkContext} from './MemoLinkContext';
+import RefPicker from './RefPicker';
 import TodoView from './TodoView';
 
 type ViewMode = 'edit' | 'split' | 'preview';
@@ -30,25 +34,34 @@ interface Props {
     folders: string[];          // 고를 수 있는 전체 폴더
     frequentFolders: string[];  // 자주 쓰는 폴더 (빠른 선택)
     allTags: string[];
-    onSave: (memo: Memo, removedImageIds: string[]) => Promise<void>;
+    indentKeys?: IndentKeys;    // 들여쓰기 단축키 (설정)
+    /** close=false: Ctrl+S — 저장 후 계속 편집. 저장된 글(새 id 포함)을 돌려준다 */
+    onSave: (memo: Memo, removedImageIds: string[], opts: {close: boolean}) => Promise<Memo>;
     onClose: () => void;
 }
+
+const time = (d = new Date()) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 
 const VIEW_KEY = 'memo.editorView';
 const normalizeTag = (t: string) => t.trim().replace(/^#+/, '').replace(/[,\s]+/g, '');
 
-const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTitle, linkNote, initialFolder, folders, frequentFolders, allTags, onSave, onClose}) => {
+const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTitle, linkNote, initialFolder, folders, frequentFolders, allTags, indentKeys = 'both', onSave, onClose}) => {
     const isTodo = kind === 'todo';
     const presetInfo = preset ? findPreset(preset, kind) : undefined;
     // 새 일일업무: 오늘 날짜 제목 + 가장 최근 일일업무 내용을 이어받음
     const dailyInit = isTodo && !memo && preset === DAILY;
-    const initial = useRef({
+    // 변경 여부를 판단하는 기준. Ctrl+S로 저장할 때마다 새로 맞춘다
+    const initialRef = useRef({
         title: memo?.title ?? initialTitle ?? (dailyInit ? dailyTitle() : ''),
         category: memo?.category ?? preset ?? initialFolder ?? '',
         content: memo?.content ?? (dailyInit && latestDaily ? latestDaily.content : presetInfo?.template ?? ''),
         tags: memo?.hashtags ?? [],
         isFavorite: memo?.isFavorite ?? false,
-    }).current;
+    });
+    const initial = initialRef.current;
+    // 마지막으로 저장된 글 (새 글은 첫 저장 뒤 id가 생긴다)
+    const [base, setBase] = useState<Memo | null>(memo);
+    const [savedAt, setSavedAt] = useState<string | null>(null);
 
     const [title, setTitle] = useState(initial.title);
     const [category, setCategory] = useState(initial.category);
@@ -67,10 +80,13 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTi
     const [showHelp, setShowHelp] = useState(false);
     const [carriedFrom, setCarriedFrom] = useState<string | null>(dailyInit && latestDaily ? latestDaily.title : null);
     const [folderPickerOpen, setFolderPickerOpen] = useState(false);
+    const [refPickerOpen, setRefPickerOpen] = useState(false);
+    const linkApi = useContext(MemoLinkContext);
     const [saving, setSaving] = useState(false);
     const [uploading, setUploading] = useState(false);
 
     const sessionImageIds = useRef<string[]>([]); // 이번 편집에서 새로 올린 이미지
+    const escPressed = useRef(false);             // Esc 다음 Tab은 원래대로 다음 칸으로 이동
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const fileRef = useRef<HTMLInputElement>(null);
 
@@ -94,22 +110,30 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTi
     };
 
     const isDirty = () =>
-        JSON.stringify({title, category, content, tags, isFavorite}) !== JSON.stringify(initial) ||
-        tagInput.trim() !== '' || sessionImageIds.current.length > 0;
+        JSON.stringify({title, category, content, tags, isFavorite}) !== JSON.stringify(initialRef.current) ||
+        tagInput.trim() !== '' || sessionImageIds.current.some(id => !base?.imageIds.includes(id));
 
     // ─── 본문 편집 도우미 ──────────────────────────────
-    const applyEdit = (fn: (text: string, start: number, end: number) => {text: string; selStart: number; selEnd: number}) => {
-        const ta = textareaRef.current;
-        const start = ta?.selectionStart ?? content.length;
-        const end = ta?.selectionEnd ?? content.length;
-        const r = fn(content, start, end);
-        setContent(r.text);
+    /** 본문을 바꾼다. 편집창이 보이면 브라우저 입력으로 넣어 Ctrl+Z 되돌리기가 유지되게 한다 */
+    const replaceContent = (next: string, selStart?: number, selEnd?: number) => {
+        const el = textareaRef.current;
+        if (!el || !replaceWithUndo(el, next)) setContent(next);
+        if (selStart === undefined) return;
         requestAnimationFrame(() => {
-            const el = textareaRef.current;
-            if (!el) return;
-            el.focus();
-            el.setSelectionRange(r.selStart, r.selEnd);
+            const t = textareaRef.current;
+            if (!t) return;
+            t.focus();
+            t.setSelectionRange(selStart, selEnd ?? selStart);
         });
+    };
+
+    const applyEdit = (fn: (text: string, start: number, end: number) => {text: string; selStart: number; selEnd: number} | null) => {
+        const ta = textareaRef.current;
+        const cur = ta ? ta.value : content;
+        const start = ta?.selectionStart ?? cur.length;
+        const end = ta?.selectionEnd ?? cur.length;
+        const r = fn(cur, start, end);
+        if (r) replaceContent(r.text, r.selStart, r.selEnd);
     };
 
     const wrap = (before: string, after = before, placeholder = '텍스트') =>
@@ -140,27 +164,46 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTi
             return {text, selStart: pos, selEnd: pos};
         });
 
-    const indent = () =>
-        applyEdit((t, s, e) => {
-            const ls = t.lastIndexOf('\n', s - 1) + 1;
-            return {text: `${t.slice(0, ls)}  ${t.slice(ls)}`, selStart: s + 2, selEnd: e + 2};
-        });
+    // 하위 항목까지 함께 한 단계 들여쓰기 / 내어쓰기
+    const indent = () => applyEdit((t, s, e) => shiftLines(t, s, e, 1));
+    const outdent = () => applyEdit((t, s, e) => shiftLines(t, s, e, -1));
 
-    const outdent = () =>
-        applyEdit((t, s, e) => {
-            const ls = t.lastIndexOf('\n', s - 1) + 1;
-            const n = /^( {1,2}|\t)/.exec(t.slice(ls))?.[0].length ?? 0;
-            return {text: t.slice(0, ls) + t.slice(ls + n), selStart: Math.max(ls, s - n), selEnd: Math.max(ls, e - n)};
-        });
-
-    /** 목록 줄에서 줄바꿈하면 같은 들여쓰기로 다음 항목을 이어준다. 빈 항목에서 누르면 목록 종료 */
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-        if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return; // 한글 조합 중에는 건드리지 않음
+        if (e.nativeEvent.isComposing) return; // 한글 조합 중에는 건드리지 않음
         const ta = e.currentTarget;
+
+        // Esc → 다음 Tab은 편집창 밖으로 이동 (키보드 사용자가 갇히지 않도록)
+        if (e.key === 'Escape') {
+            escPressed.current = true;
+            return;
+        }
+        const afterEsc = escPressed.current;
+        escPressed.current = false;
+
+        // Tab / Shift+Tab: 들여쓰기 · 내어쓰기
+        if (e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey && (indentKeys === 'tab' || indentKeys === 'both') && !afterEsc) {
+            e.preventDefault();
+            if (e.shiftKey) outdent();
+            else indent();
+            return;
+        }
+        // Ctrl+→ / Ctrl+←: 목록 줄에서만 (일반 문장에서는 단어 단위 이동 그대로)
+        if (
+            (e.key === 'ArrowRight' || e.key === 'ArrowLeft') && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey &&
+            (indentKeys === 'ctrl' || indentKeys === 'both') && isListLine(currentLine(ta.value, ta.selectionStart))
+        ) {
+            e.preventDefault();
+            if (e.key === 'ArrowRight') indent();
+            else outdent();
+            return;
+        }
+
+        /** 목록 줄에서 줄바꿈하면 같은 들여쓰기로 다음 항목을 이어준다. 빈 항목에서 누르면 목록 종료 */
+        if (e.key !== 'Enter' || e.shiftKey) return;
         const pos = ta.selectionStart;
         if (pos !== ta.selectionEnd) return;
-        const ls = content.lastIndexOf('\n', pos - 1) + 1;
-        const before = content.slice(ls, pos);
+        const ls = ta.value.lastIndexOf('\n', pos - 1) + 1;
+        const before = ta.value.slice(ls, pos);
         const m = /^([ \t]*)(?:([-*+])|(\d+)([.)]))[ \t]+(\[[ xX/-]\][ \t]*)?/.exec(before);
         if (!m) return;
         e.preventDefault();
@@ -219,12 +262,12 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTi
         if (!isTemplate(content, kind)) return; // 이미 작성한 내용은 건드리지 않음
         if (isTodo && !memo && isDaily(next)) {
             if (!title.trim()) setTitle(dailyTitle());
-            setContent(latestDaily?.content ?? findPreset(DAILY, kind)?.template ?? '');
+            replaceContent(latestDaily?.content ?? findPreset(DAILY, kind)?.template ?? '');
             setCarriedFrom(latestDaily?.title ?? null);
             return;
         }
         const template = findPreset(next, kind)?.template;
-        if (template) setContent(template);
+        if (template) replaceContent(template);
     };
 
     const addTag = (raw: string) => {
@@ -238,7 +281,12 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTi
         .slice(0, 12);
 
     // ─── 저장 / 닫기 ────────────────────────────────
-    const handleSave = async () => {
+    /** 이미지 정리: 이번 편집에서 다룬 이미지 중 최종 본문에 없는 것 */
+    const unusedImages = (keep: string[]) =>
+        [...new Set([...(memo?.imageIds ?? []), ...(base?.imageIds ?? []), ...sessionImageIds.current])].filter(id => !keep.includes(id));
+
+    const handleSave = async (close = true) => {
+        if (saving || uploading) return;
         if (!title.trim() && !content.trim()) {
             alert('제목이나 내용을 입력하세요.');
             return;
@@ -247,36 +295,71 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTi
         const finalContent = isTodo ? normalizeTodo(content, todayStr()) : content;
         const imageIds = extractImageIds(finalContent);
         const pendingTag = normalizeTag(tagInput);
+        const finalTags = pendingTag && !tags.includes(pendingTag) ? [...tags, pendingTag] : tags;
+        const finalTitle = title.trim() || (isTodo && isDaily(category) ? dailyTitle() : deriveTitle(finalContent));
         const next: Memo = {
-            id: memo?.id,
-            uid: memo?.uid ?? newId(),
+            ...(base ?? {}),  // 숨김·잠금 등 편집기에서 다루지 않는 값은 그대로 유지
+            id: base?.id,
+            uid: base?.uid ?? newId(),
             kind,
-            title: title.trim() || (isTodo && isDaily(category) ? dailyTitle() : deriveTitle(finalContent)),
+            title: finalTitle,
             category: normalizePath(category),
             content: finalContent,
-            hashtags: pendingTag && !tags.includes(pendingTag) ? [...tags, pendingTag] : tags,
+            hashtags: finalTags,
             imageIds,
             isFavorite,
-            comments: memo?.comments ?? [],
-            createdAt: memo?.createdAt ?? now,
+            comments: base?.comments ?? [],
+            createdAt: base?.createdAt ?? now,
             updatedAt: now,
         };
-        // 본문에서 빠진 이미지는 DB에서도 정리
-        const removed = [...new Set([...(memo?.imageIds ?? []), ...sessionImageIds.current])].filter(id => !imageIds.includes(id));
+        // 계속 편집할 때는 이미지를 지우지 않는다 (되돌리기로 다시 살릴 수 있으므로). 닫을 때 정리
+        const removed = close ? unusedImages(imageIds) : [];
         setSaving(true);
         try {
-            await onSave(next, removed);
+            const saved = await onSave(next, removed, {close});
+            if (close) return;
+            // 계속 편집: 저장된 내용을 새 기준으로
+            setBase(saved);
+            if (finalContent !== content) {
+                const ta = textareaRef.current;
+                replaceContent(finalContent, ta?.selectionStart, ta?.selectionEnd);
+            }
+            if (finalTitle !== title) setTitle(finalTitle);
+            if (finalTags !== tags) {
+                setTags(finalTags);
+                setTagInput('');
+            }
+            setCarriedFrom(null);
+            initialRef.current = {title: finalTitle, category: next.category, content: finalContent, tags: finalTags, isFavorite};
+            setSavedAt(time());
+            setSaving(false);
         } catch {
             alert('저장하지 못했습니다.');
             setSaving(false);
         }
     };
 
+    // Ctrl+S (맥은 Cmd+S): 저장하고 계속 편집. 한글 입력 상태에서도 동작하도록 e.code로 판단
+    const saveRef = useRef(handleSave);
+    saveRef.current = handleSave;
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'KeyS') {
+                e.preventDefault(); // 브라우저의 '페이지 저장' 창 막기
+                if (!e.repeat) saveRef.current(false);
+            }
+        };
+        window.addEventListener('keydown', onKey, true);
+        return () => window.removeEventListener('keydown', onKey, true);
+    }, []);
+
     const handleClose = async () => {
         if (isDirty() && !window.confirm('저장하지 않은 내용이 있습니다. 닫을까요?')) return;
-        if (sessionImageIds.current.length) {
-            await deleteImages(sessionImageIds.current);
-            releaseImageUrls(sessionImageIds.current);
+        // 마지막 저장본에 없는 이미지 정리 (저장 없이 닫으면 이번에 올린 이미지가 대상)
+        const orphan = unusedImages(base?.imageIds ?? []);
+        if (orphan.length) {
+            await deleteImages(orphan);
+            releaseImageUrls(orphan);
         }
         onClose();
     };
@@ -297,6 +380,7 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTi
         {label: '인용', icon: <FaQuoteLeft size={13} />, action: () => prefixLine('> ')},
         {label: '코드', icon: <FiCode />, action: () => wrap('`')},
         {label: '링크', icon: <FiLink />, action: () => wrap('[', '](https://)', '링크 이름')},
+        ...(linkApi?.showLinkButton ? [{label: '글 연결 (다른 글·댓글·이미지)', icon: <FiLink2 />, action: () => setRefPickerOpen(true)}] : []),
         {label: '사진 추가', icon: <FiImage />, action: () => fileRef.current?.click()},
         {label: '작성법 도움말', icon: <FiHelpCircle />, action: () => setShowHelp(true)},
     ];
@@ -316,7 +400,10 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTi
                 <button onClick={handleClose} aria-label="닫기" className="rounded-full p-2 hover:bg-gray-800">
                     <FiX size={22} />
                 </button>
-                <span className="flex-1 font-semibold">{isTodo ? (memo ? '할일 수정' : '새 할일') : memo ? '메모 수정' : '새 메모'}</span>
+                <span className="min-w-0 flex-1 truncate font-semibold">
+                    {isTodo ? (base ? '할일 수정' : '새 할일') : base ? '메모 수정' : '새 메모'}
+                    {savedAt && <span className="ml-2 text-xs font-normal text-emerald-400">{savedAt} 저장됨</span>}
+                </span>
                 <button
                     onClick={() => setIsFavorite(v => !v)}
                     aria-label={isFavorite ? '즐겨찾기 해제' : '즐겨찾기'}
@@ -326,7 +413,8 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTi
                     <FiStar size={20} fill={isFavorite ? 'currentColor' : 'none'} />
                 </button>
                 <button
-                    onClick={handleSave}
+                    onClick={() => handleSave(true)}
+                    title="저장하고 닫기 (Ctrl+S: 저장하고 계속 편집)"
                     disabled={saving || uploading}
                     className="ml-1 rounded-full bg-emerald-600 px-4 py-1.5 font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
                 >
@@ -493,14 +581,31 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTi
                     />
                 )}
                 {view !== 'edit' && (
+                    <MemoLinkContext.Provider value={linkApi && {...linkApi, interactive: false}}>
                     <div className={`min-h-0 flex-1 overflow-y-auto p-3 pb-[calc(1rem+env(safe-area-inset-bottom))] ${view === 'split' ? 'bg-gray-950/40' : ''}`}>
                         {!content.trim() ? <p className="text-sm text-gray-600">작성한 내용이 여기에 보입니다.</p> : isTodo ? <TodoView content={content} /> : <MarkdownView content={content} />}
+                        {/* 미리보기의 링크는 눌러도 열지 않는다 (편집 중인 내용을 잃지 않도록) */}
                     </div>
+                    </MemoLinkContext.Provider>
                 )}
             </div>
 
             <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={e => handleFiles(e.target.files)} />
             {showHelp && <MarkdownHelp kind={kind} onClose={() => setShowHelp(false)} />}
+            {refPickerOpen && (
+                <RefPicker
+                    excludeUid={base?.uid}
+                    onClose={() => setRefPickerOpen(false)}
+                    onPick={md => {
+                        setRefPickerOpen(false);
+                        applyEdit((t, s, e) => {
+                            const pad = s > 0 && !/\s$/.test(t.slice(0, s)) ? ' ' : '';
+                            const at = s + pad.length + md.length;
+                            return {text: t.slice(0, s) + pad + md + t.slice(e), selStart: at, selEnd: at};
+                        });
+                    }}
+                />
+            )}
             {folderPickerOpen && (
                 <FolderPicker
                     title="폴더 선택"

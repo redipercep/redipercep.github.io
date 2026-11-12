@@ -1,9 +1,11 @@
-import React, {useLayoutEffect, useMemo, useRef, useState} from 'react';
-import {FiEdit2, FiSend, FiTrash2} from 'react-icons/fi';
+import React, {useContext, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
+import {FiEdit2, FiLink, FiLink2, FiSend, FiTrash2} from 'react-icons/fi';
 import type {MemoComment} from '../types/memo';
 import {formatDate} from '../utils/format';
 import MarkdownView from './MarkdownView';
+import {MemoLinkContext} from './MemoLinkContext';
 import Pager from './Pager';
+import RefPicker from './RefPicker';
 
 interface Props {
     comments: MemoComment[];
@@ -11,11 +13,15 @@ interface Props {
     onEdit: (commentId: string, content: string) => Promise<void>;
     onDelete: (commentId: string) => Promise<void>;
     pageSize?: number;      // 한 번에 보이는 댓글 수 (설정)
+    focusId?: string;       // 링크로 열었을 때 보여줄 댓글
+    ownerUid?: string;      // 이 댓글이 달린 글 (글 연결에서 자기 자신 제외)
+    onCopyLink?: (commentId: string) => void;
 }
 
 /** 내용에 맞춰 높이가 늘어나는 입력창 */
-const AutoTextarea: React.FC<React.TextareaHTMLAttributes<HTMLTextAreaElement>> = props => {
+const AutoTextarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttributes<HTMLTextAreaElement>>((props, outer) => {
     const ref = useRef<HTMLTextAreaElement>(null);
+    React.useImperativeHandle(outer, () => ref.current as HTMLTextAreaElement);
     useLayoutEffect(() => {
         const el = ref.current;
         if (!el) return;
@@ -23,12 +29,15 @@ const AutoTextarea: React.FC<React.TextareaHTMLAttributes<HTMLTextAreaElement>> 
         el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
     }, [props.value]);
     return <textarea ref={ref} rows={1} {...props} />;
-};
+});
 
 const inputClass =
     'min-w-0 flex-1 resize-none rounded-lg bg-gray-900 px-3 py-2 text-base leading-relaxed text-gray-200 outline-none placeholder:text-gray-500 focus:ring-2 focus:ring-emerald-500 sm:text-sm';
 
-const MemoComments: React.FC<Props> = ({comments, onAdd, onEdit, onDelete, pageSize: PAGE_SIZE = 5}) => {
+const MemoComments: React.FC<Props> = ({comments, onAdd, onEdit, onDelete, pageSize: PAGE_SIZE = 5, focusId, ownerUid, onCopyLink}) => {
+    const linkApi = useContext(MemoLinkContext);
+    const [picking, setPicking] = useState(false);
+    const draftRef = useRef<HTMLTextAreaElement>(null);
     // 최신 댓글이 위로
     const sorted = useMemo(() => [...comments].sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [comments]);
     const [paging, setPaging] = useState(false); // 더보기를 눌러 페이지 이동 중
@@ -37,6 +46,33 @@ const MemoComments: React.FC<Props> = ({comments, onAdd, onEdit, onDelete, pageS
     const current = paging ? Math.min(page, pageCount - 1) : 0; // 삭제로 페이지가 줄어도 범위 안으로
     const shown = sorted.slice(current * PAGE_SIZE, current * PAGE_SIZE + PAGE_SIZE);
     const showPager = paging && pageCount > 1;
+
+    // 링크로 특정 댓글을 열면: 그 댓글이 있는 페이지로 넘기고 강조
+    useEffect(() => {
+        if (!focusId) return;
+        const idx = sorted.findIndex(c => c.id === focusId);
+        if (idx < 0) return;
+        const p = Math.floor(idx / PAGE_SIZE);
+        setPaging(p > 0);
+        setPage(p);
+        const t = setTimeout(() => document.getElementById(`comment-${focusId}`)?.scrollIntoView({behavior: 'smooth', block: 'center'}), 80);
+        return () => clearTimeout(t);
+    }, [focusId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    /** 글 연결: 입력 중인 댓글의 커서 위치에 링크를 넣는다 */
+    const insertLink = (md: string) => {
+        setPicking(false);
+        const el = draftRef.current;
+        const pos = el?.selectionStart ?? draft.length;
+        const end = el?.selectionEnd ?? pos;
+        const pad = pos > 0 && !/\s$/.test(draft.slice(0, pos)) ? ' ' : '';
+        setDraft(draft.slice(0, pos) + pad + md + ' ' + draft.slice(end));
+        requestAnimationFrame(() => {
+            const at = pos + pad.length + md.length + 1;
+            draftRef.current?.focus();
+            draftRef.current?.setSelectionRange(at, at);
+        });
+    };
 
     const [draft, setDraft] = useState('');
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -73,7 +109,18 @@ const MemoComments: React.FC<Props> = ({comments, onAdd, onEdit, onDelete, pageS
     return (
         <div className="mt-2 space-y-2">
             <div className="flex items-end gap-2">
+                {linkApi?.showLinkButton && (
+                    <button
+                        onClick={() => setPicking(true)}
+                        aria-label="글 연결"
+                        title="다른 글 · 댓글 · 이미지 연결"
+                        className="shrink-0 rounded-lg p-2.5 text-gray-400 hover:bg-gray-700 hover:text-gray-200"
+                    >
+                        <FiLink2 size={18} />
+                    </button>
+                )}
                 <AutoTextarea
+                    ref={draftRef}
                     value={draft}
                     onChange={e => setDraft(e.target.value)}
                     onKeyDown={submitOnShortcut(submit)}
@@ -115,13 +162,22 @@ const MemoComments: React.FC<Props> = ({comments, onAdd, onEdit, onDelete, pageS
                         </div>
                     </div>
                 ) : (
-                    <div key={c.id} className="rounded-lg bg-gray-900/60 px-3 pb-1 pt-2 [&_p:last-child]:mb-0">
+                    <div
+                        key={c.id}
+                        id={`comment-${c.id}`}
+                        className={`scroll-mt-24 rounded-lg px-3 pb-1 pt-2 [&_p:last-child]:mb-0 ${c.id === focusId ? 'bg-violet-950/70 ring-1 ring-violet-500' : 'bg-gray-900/60'}`}
+                    >
                         <MarkdownView content={c.content} />
                         <div className="mt-1 flex items-center text-xs text-gray-500">
                             <span className="flex-1">
                                 {formatDate(c.createdAt)}
                                 {c.updatedAt.slice(0, 16) !== c.createdAt.slice(0, 16) && ' (수정됨)'}
                             </span>
+                            {onCopyLink && (
+                                <button onClick={() => onCopyLink(c.id)} aria-label="댓글 링크 복사" title="링크 복사" className="rounded-full p-2 text-gray-400 hover:bg-gray-700">
+                                    <FiLink size={14} />
+                                </button>
+                            )}
                             <button
                                 onClick={() => {
                                     setEditingId(c.id);
@@ -173,6 +229,7 @@ const MemoComments: React.FC<Props> = ({comments, onAdd, onEdit, onDelete, pageS
                     <Pager label="댓글 페이지" page={current} count={pageCount} onPage={setPage} />
                 </div>
             )}
+            {picking && <RefPicker excludeUid={ownerUid} onPick={insertLink} onClose={() => setPicking(false)} />}
         </div>
     );
 };

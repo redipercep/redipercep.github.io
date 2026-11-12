@@ -3,9 +3,11 @@ import {FiChevronRight} from 'react-icons/fi';
 import ReactMarkdown, {defaultUrlTransform, type Components} from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {IMG_PROTOCOL, useImageUrl} from '../utils/image';
+import {isRefHref, parseRef} from '../utils/links';
+import RefLink from './RefLink';
 
-// 기본 설정은 알 수 없는 주소를 지우므로 memo-img: 주소는 통과시킨다
-const urlTransform = (url: string) => (url.startsWith(IMG_PROTOCOL) ? url : defaultUrlTransform(url));
+// 기본 설정은 알 수 없는 주소를 지우므로 앱 내부 주소(memo:, memo-img:)는 통과시킨다
+const urlTransform = (url: string) => (isRefHref(url) ? url : defaultUrlTransform(url));
 
 const MemoImg: React.FC<{src?: string; alt?: string}> = ({src, alt}) => {
     const localId = src?.startsWith(IMG_PROTOCOL) ? src.slice(IMG_PROTOCOL.length) : null;
@@ -72,11 +74,15 @@ const components: Components = {
     h3: ({node: _n, children, ...p}) => <h3 className="mb-1 mt-3 font-semibold text-gray-100 first:mt-0" {...p}>{children}</h3>,
     h4: ({node: _n, children, ...p}) => <h4 className="mb-1 mt-3 font-semibold text-gray-100" {...p}>{children}</h4>,
     p: ({node: _n, ...p}) => <p className="mb-2 leading-relaxed" {...p} />,
-    a: ({node: _n, children, ...p}) => (
-        <a className="text-sky-400 underline underline-offset-2" target="_blank" rel="noopener noreferrer" {...p}>
-            {children}
-        </a>
-    ),
+    a: ({node: _n, children, href, ...p}) => {
+        const ref = parseRef(href);
+        if (ref) return <RefLink target={ref}>{children}</RefLink>;
+        return (
+            <a className="text-sky-400 underline underline-offset-2" target="_blank" rel="noopener noreferrer" href={href} {...p}>
+                {children}
+            </a>
+        );
+    },
     ul: ({node: _n, className, ...p}) => {
         const task = className?.includes('contains-task-list');
         return (

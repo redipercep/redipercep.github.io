@@ -1,8 +1,10 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
-import {FiChevronLeft, FiChevronRight, FiDownload, FiFileText, FiShare2, FiX} from 'react-icons/fi';
+import {FiCheck, FiChevronLeft, FiChevronRight, FiDownload, FiFileText, FiLink, FiShare2, FiX} from 'react-icons/fi';
 import {getAllImages} from '../db/memoDB';
 import type {Memo, MemoImage} from '../types/memo';
-import {downloadBlob, downloadName, useImageUrl} from '../utils/image';
+import {copyText} from '../utils/format';
+import {downloadBlob, downloadName, imageBlob, useImageUrl} from '../utils/image';
+import {refMarkdown} from '../utils/links';
 import Pager from './Pager';
 
 interface Props {
@@ -12,10 +14,11 @@ interface Props {
     pageSize?: number;
 }
 
-interface Entry {
+export interface ImageEntry {
     image: MemoImage;
-    memo: Memo;
+    memo?: Memo;            // 이미지가 들어 있는 글
 }
+type Entry = ImageEntry;
 
 const Thumb: React.FC<{image: MemoImage; onClick: () => void}> = ({image, onClick}) => {
     const url = useImageUrl(image.id);
@@ -28,12 +31,20 @@ const Thumb: React.FC<{image: MemoImage; onClick: () => void}> = ({image, onClic
 
 const canShareFiles = typeof navigator !== 'undefined' && typeof navigator.canShare === 'function';
 
-const Viewer: React.FC<{entries: Entry[]; index: number; onIndex: (i: number) => void; onClose: () => void; onOpenMemo: (id: number) => void}> = ({
+export const ImageViewer: React.FC<{entries: Entry[]; index: number; onIndex: (i: number) => void; onClose: () => void; onOpenMemo: (id: number) => void}> = ({
     entries, index, onIndex, onClose, onOpenMemo,
 }) => {
     const {image, memo} = entries[index];
     const url = useImageUrl(image.id);
     const touchX = useRef<number | null>(null);
+    const [copied, setCopied] = useState(false);
+    const copyLink = async () => {
+        const label = memo ? `${memo.title} 이미지` : image.name;
+        if (await copyText(refMarkdown(label, {type: 'image', imageId: image.id}))) {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+        }
+    };
     const prev = () => index > 0 && onIndex(index - 1);
     const next = () => index < entries.length - 1 && onIndex(index + 1);
 
@@ -47,14 +58,22 @@ const Viewer: React.FC<{entries: Entry[]; index: number; onIndex: (i: number) =>
         return () => window.removeEventListener('keydown', onKey);
     });
 
+    // 잠근 글의 이미지는 풀어서 내려받는다
+    const download = async () => {
+        const blob = await imageBlob(image);
+        if (blob) downloadBlob(blob, downloadName(image));
+    };
+
     const share = async () => {
-        const file = new File([image.blob], downloadName(image), {type: image.type});
+        const blob = await imageBlob(image);
+        if (!blob) return;
+        const file = new File([blob], downloadName(image), {type: image.type});
         if (navigator.canShare?.({files: [file]})) {
             try {
                 await navigator.share({files: [file]});
             } catch { /* 사용자가 취소 */ }
         } else {
-            downloadBlob(image.blob, downloadName(image));
+            downloadBlob(blob, downloadName(image));
         }
     };
 
@@ -70,7 +89,10 @@ const Viewer: React.FC<{entries: Entry[]; index: number; onIndex: (i: number) =>
                         <FiShare2 size={20} />
                     </button>
                 )}
-                <button onClick={() => downloadBlob(image.blob, downloadName(image))} aria-label="다운로드" className="rounded-full p-2 hover:bg-white/10">
+                <button onClick={copyLink} aria-label="링크 복사" title="링크 복사 — 다른 글이나 댓글에 붙여넣으세요" className="rounded-full p-2 hover:bg-white/10">
+                    {copied ? <FiCheck size={20} className="text-emerald-400" /> : <FiLink size={20} />}
+                </button>
+                <button onClick={download} aria-label="다운로드" className="rounded-full p-2 hover:bg-white/10">
                     <FiDownload size={20} />
                 </button>
             </div>
@@ -99,14 +121,14 @@ const Viewer: React.FC<{entries: Entry[]; index: number; onIndex: (i: number) =>
                 )}
             </div>
 
-            <button
+            {memo && <button
                 onClick={() => memo.id != null && onOpenMemo(memo.id)}
                 className="mx-3 mb-[calc(0.75rem+env(safe-area-inset-bottom))] mt-2 flex items-center gap-2 rounded-lg bg-white/10 px-3 py-2.5 text-left text-sm"
             >
                 <FiFileText className="shrink-0" />
                 <span className="min-w-0 flex-1 truncate">{memo.title}</span>
                 <span className="shrink-0 text-gray-400">메모 보기</span>
-            </button>
+            </button>}
         </div>
     );
 };
@@ -149,7 +171,7 @@ const ImageGallery: React.FC<Props> = ({memos, refreshKey, onOpenMemo, pageSize 
             <p className="mb-2 text-sm text-gray-500">이미지 {entries.length}개 — 눌러서 크게 보고 저장할 수 있어요</p>
             <div className="grid grid-cols-3 gap-1 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
                 {entries.slice(start, start + pageSize).map((e, i) => (
-                    <Thumb key={`${e.memo.id}-${e.image.id}`} image={e.image} onClick={() => setViewerIndex(start + i)} />
+                    <Thumb key={`${e.memo?.id}-${e.image.id}`} image={e.image} onClick={() => setViewerIndex(start + i)} />
                 ))}
             </div>
             <div className="mt-4 flex justify-center">
@@ -165,7 +187,7 @@ const ImageGallery: React.FC<Props> = ({memos, refreshKey, onOpenMemo, pageSize 
                 />
             </div>
             {viewerIndex != null && entries[viewerIndex] && (
-                <Viewer
+                <ImageViewer
                     entries={entries}
                     index={viewerIndex}
                     onIndex={setViewerIndex}
