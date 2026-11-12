@@ -1,20 +1,22 @@
 import React, {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {Link} from 'react-router-dom';
 import {
-    FiArrowDown, FiArrowUp, FiCheckSquare, FiChevronDown, FiCornerLeftUp, FiFolder, FiFolderPlus, FiGrid, FiInbox,
-    FiList, FiPlus, FiSearch, FiSettings, FiStar, FiTrash2, FiX,
+    FiArrowDown, FiArrowUp, FiCheckSquare, FiChevronDown, FiCornerLeftUp, FiEye, FiEyeOff, FiFolder, FiFolderPlus, FiGrid, FiInbox,
+    FiList, FiLock, FiPlus, FiSearch, FiSettings, FiStar, FiTrash2, FiUnlock, FiX,
 } from 'react-icons/fi';
 import {useFolderActions} from '../components/FolderActions';
 import FolderPicker from '../components/FolderPicker';
 import FolderTree, {dropHandlers, type FolderDnd, MIME_MEMOS, useExpanded} from '../components/FolderTree';
-import ImageGallery from '../components/ImageGallery';
+import ImageGallery, {type ImageEntry, ImageViewer} from '../components/ImageGallery';
+import {type MemoLinkApi, MemoLinkContext} from '../components/MemoLinkContext';
 import MemoCard from '../components/MemoCard';
 import MemoEditor from '../components/MemoEditor';
 import MemoPicker from '../components/MemoPicker';
 import Pager from '../components/Pager';
+import VaultDialog from '../components/VaultDialog';
 import {type LinkTarget, type TaskLinkApi, TaskLinkContext} from '../components/TaskLinkContext';
 import {
-    deleteImages, deleteMemoWithImages, type FolderMap, getAllMemos, getFolderMap, moveMemosTo, saveMemo,
+    deleteImages, deleteMemoWithImages, type FolderMap, getAllMemos, getFolderMap, getImage, getVaultRecords, moveMemosTo, saveMemo, updateMemos,
 } from '../db/memoDB';
 import type {Memo, MemoKind, SortKey} from '../types/memo';
 import {
@@ -22,9 +24,11 @@ import {
 } from '../utils/folders';
 import {copyText, newId} from '../utils/format';
 import {releaseImageUrls} from '../utils/image';
+import {commentLabel, linkedUids, refMarkdown, type RefTarget} from '../utils/links';
 import {DAILY, isDaily, presetsFor} from '../utils/presets';
 import {SORT_LABELS, useSettings} from '../utils/settings';
 import {addTaskLink, localDate, parseTodo, todayStr, toReportText} from '../utils/todo';
+import {isUnlocked, lockVault, subscribeVault, useAutoLock, useVaultState} from '../utils/vault';
 
 type Tab = 'memos' | 'todos' | 'images';
 type EditorState = {memo: Memo | null; kind: MemoKind; preset?: string; folder?: string; linkTo?: LinkTarget} | null;
@@ -80,6 +84,7 @@ const MemoPage: React.FC = () => {
     const [query, setQuery] = useState('');
     const [folder, setFolder] = useState<string | null>(null);
     const [favoritesOnly, setFavoritesOnly] = useState(false);
+    const [hiddenView, setHiddenView] = useState(false); // '숨긴 글' 보기
     const [activeTag, setActiveTag] = useState<string | null>(null);
     const [page, setPage] = useState(0);
 
@@ -90,7 +95,13 @@ const MemoPage: React.FC = () => {
     const [focusId, setFocusId] = useState<number | null>(null);
     const [galleryKey, setGalleryKey] = useState(0);
     const [toast, setToast] = useState<string | null>(null);
-    const [popupUids, setPopupUids] = useState<string[] | null>(null); // 할일에서 연 메모 팝업
+    // 글 팝업: 할일 항목의 연결 메모, 본문·댓글 속 링크로 연 글
+    const [popup, setPopup] = useState<{uids: string[]; title: string; commentId?: string} | null>(null);
+    const [imageView, setImageView] = useState<{entries: ImageEntry[]; index: number} | null>(null);
+    // 비밀번호 잠금
+    const [hasVault, setHasVault] = useState(false);
+    const [vaultDialog, setVaultDialog] = useState<{mode: 'unlock' | 'setup'; reason?: string; then?: () => void} | null>(null);
+    const unlocked = useVaultState();
     const [picker, setPicker] = useState<LinkTarget | null>(null);
 
     const headerRef = useRef<HTMLElement>(null);
@@ -103,9 +114,10 @@ const MemoPage: React.FC = () => {
     const pageSize = settings.pageSize;
 
     const reload = useCallback(async () => {
-        const [list, folders] = await Promise.all([getAllMemos(), getFolderMap()]);
+        const [list, folders, vaults] = await Promise.all([getAllMemos(), getFolderMap(), getVaultRecords()]);
         setMemos(list);
         setFolderMap(folders);
+        setHasVault(vaults.length > 0);
         setGalleryKey(k => k + 1);
         setLoading(false);
     }, []);
@@ -113,6 +125,9 @@ const MemoPage: React.FC = () => {
     useEffect(() => {
         reload();
     }, [reload]);
+
+    // 잠그거나 풀면 글을 다시 읽는다 (잠그면 내용이 화면에서 사라짐)
+    useEffect(() => subscribeVault(() => reload()), [reload]);
 
     // PC 사이드바가 헤더 아래에 붙도록 헤더 높이를 잰다
     useLayoutEffect(() => {
@@ -130,7 +145,10 @@ const MemoPage: React.FC = () => {
 
     // ─── 파생 데이터 ────────────────────────────────
     // 메모/할일 탭은 해당 종류만, 이미지 탭은 전체
-    const scoped = useMemo(() => (tab === 'images' ? memos : memos.filter(m => m.kind === kind)), [memos, tab, kind]);
+    const scopedAll = useMemo(() => (tab === 'images' ? memos : memos.filter(m => m.kind === kind)), [memos, tab, kind]);
+    // 숨긴 글은 '숨긴 글' 보기에서만 (목록·검색·개수·태그·이미지 모두 이 목록을 바탕으로 함)
+    const scoped = useMemo(() => scopedAll.filter(m => !!m.isHidden === hiddenView), [scopedAll, hiddenView]);
+    const hiddenCount = useMemo(() => scopedAll.filter(m => m.isHidden).length, [scopedAll]);
 
     const folderPaths = useMemo(
         () => collectFolders(tab === 'images' ? [...folderMap.memo, ...folderMap.todo] : folderMap[kind], scoped.map(m => m.category)),
@@ -147,7 +165,7 @@ const MemoPage: React.FC = () => {
     const latestDaily = useMemo(
         () =>
             memos
-                .filter(m => m.kind === 'todo' && isDaily(m.category))
+                .filter(m => m.kind === 'todo' && isDaily(m.category) && !m.isSealed)
                 .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null,
         [memos],
     );
@@ -178,7 +196,13 @@ const MemoPage: React.FC = () => {
         });
     }, [scoped, folder, favoritesOnly, activeTag, query, sortKey, sortDir]);
 
-    const hasFilter = !!(folder !== null || favoritesOnly || activeTag || query.trim());
+    const hasFilter = !!(folder !== null || favoritesOnly || hiddenView || activeTag || query.trim());
+
+    // 평소 보기에서 검색할 때 숨긴 글에도 일치하는 글이 있으면 알려준다
+    const hiddenMatches = useMemo(
+        () => (hiddenView || !query.trim() ? 0 : scopedAll.filter(m => m.isHidden && inFolder(m, folder) && matches(m, query)).length),
+        [hiddenView, query, scopedAll, folder],
+    );
     const pageCount = Math.max(1, Math.ceil(visible.length / pageSize));
     const currentPage = Math.min(page, pageCount - 1);
     const pageItems = visible.slice(currentPage * pageSize, currentPage * pageSize + pageSize);
@@ -186,7 +210,7 @@ const MemoPage: React.FC = () => {
     // 조건이 바뀌면 첫 페이지로
     useEffect(() => {
         setPage(0);
-    }, [tab, folder, favoritesOnly, activeTag, query, sortKey, sortDir, pageSize]);
+    }, [tab, folder, favoritesOnly, hiddenView, activeTag, query, sortKey, sortDir, pageSize]);
 
     useEffect(() => {
         try {
@@ -197,6 +221,7 @@ const MemoPage: React.FC = () => {
     const clearFilters = useCallback(() => {
         setFolder(null);
         setFavoritesOnly(false);
+        setHiddenView(false);
         setActiveTag(null);
         setQuery('');
     }, []);
@@ -204,6 +229,11 @@ const MemoPage: React.FC = () => {
     // 다른 화면에서 특정 글로 이동: 필터를 풀고, 그 글이 있는 페이지로 가서 스크롤
     useEffect(() => {
         if (focusId == null || tab === 'images') return;
+        const focused = memos.find(m => m.id === focusId);
+        if (focused && !!focused.isHidden !== hiddenView) {
+            setHiddenView(!!focused.isHidden); // 숨긴 글로 이동할 때는 숨긴 글 보기로
+            return;
+        }
         const idx = visible.findIndex(m => m.id === focusId);
         if (idx < 0) {
             if (hasFilter) clearFilters();
@@ -217,7 +247,7 @@ const MemoPage: React.FC = () => {
         requestAnimationFrame(() => document.getElementById(`memo-${focusId}`)?.scrollIntoView({behavior: 'smooth', block: 'start'}));
         const t = setTimeout(() => setFocusId(null), 2500);
         return () => clearTimeout(t);
-    }, [focusId, tab, visible, pageSize, currentPage, hasFilter, clearFilters]);
+    }, [focusId, tab, visible, pageSize, currentPage, hasFilter, clearFilters, memos, hiddenView]);
 
     // ─── 폴더 ───────────────────────────────────────
     const folderActions = useFolderActions(
@@ -298,9 +328,10 @@ const MemoPage: React.FC = () => {
     };
 
     // ─── 글 동작 ────────────────────────────────────
-    const handleSave = async (memo: Memo, removedImageIds: string[]) => {
-        await saveMemo(memo);
-        // 할일 항목에서 만든 메모면 그 항목에 연결
+    const handleSave = async (memo: Memo, removedImageIds: string[], {close}: {close: boolean}) => {
+        const id = await saveMemo(memo);
+        const saved = {...memo, id};
+        // 할일 항목에서 만든 메모면 그 항목에 연결 (처음 저장할 때 한 번만)
         const target = editor?.linkTo;
         const todo = target && memos.find(m => m.id === target.todoId);
         if (target && todo) {
@@ -310,9 +341,11 @@ const MemoPage: React.FC = () => {
             await deleteImages(removedImageIds);
             releaseImageUrls(removedImageIds);
         }
-        setEditor(null);
+        if (close) setEditor(null);
+        else setEditor(prev => prev && {...prev, memo: saved, linkTo: undefined});
         await reload();
         showToast('저장했습니다');
+        return saved;
     };
 
     const handleDelete = async (memo: Memo) => {
@@ -361,6 +394,39 @@ const MemoPage: React.FC = () => {
         showToast(ok ? '보고용 텍스트를 복사했습니다' : '복사하지 못했습니다');
     };
 
+    const setHidden = async (ids: number[], hidden: boolean) => {
+        if (!ids.length) return;
+        await updateMemos(ids, {isHidden: hidden});
+        await reload();
+        setSelectedIds(new Set());
+        showToast(
+            hidden
+                ? `${ids.length > 1 ? `${ids.length}개를 ` : ''}숨겼습니다. '숨긴 글'에서 다시 볼 수 있습니다`
+                : `${ids.length > 1 ? `${ids.length}개의 ` : ''}숨김을 해제했습니다`,
+        );
+    };
+
+    // 비밀번호 필요 → 먼저 정하거나 풀고, 이어서 원래 하려던 일을 한다
+    const withVault = (reason: string, action: () => void) => {
+        if (!hasVault) return setVaultDialog({mode: 'setup', reason: `${reason} 먼저 비밀번호를 정하세요.`, then: action});
+        if (!isUnlocked()) return setVaultDialog({mode: 'unlock', reason, then: action});
+        action();
+    };
+
+    const toggleLock = (memo: Memo) =>
+        withVault(memo.isLocked ? '잠금을 해제하려면' : '이 글을 잠그려면', async () => {
+            try {
+                await saveMemo({...memo, isLocked: !memo.isLocked});
+                await reload();
+                showToast(memo.isLocked ? '잠금을 해제했습니다' : '잠갔습니다. 잠금 상태에서는 제목과 내용이 보이지 않습니다');
+            } catch {
+                showToast('처리하지 못했습니다');
+            }
+        });
+
+    // 편집 중에는 자동으로 잠그지 않는다 (잠근 글을 편집 중이면 저장할 수 없게 되므로)
+    useAutoLock(settings.autoLockMinutes, settings.lockOnHide, !!editor);
+
     const toggleFavorite = async (memo: Memo) => {
         // 즐겨찾기는 내용 수정이 아니므로 수정일을 바꾸지 않는다
         const next = {...memo, isFavorite: !memo.isFavorite};
@@ -392,12 +458,53 @@ const MemoPage: React.FC = () => {
     const linkApi = useMemo<TaskLinkApi>(
         () => ({
             memosByUid,
-            openMemos: uids => setPopupUids(uids),
+            openMemos: uids => setPopup({uids, title: '연결된 메모'}),
             createMemo: target => setEditor({memo: null, kind: 'memo', linkTo: target}),
             pickMemo: target => setPicker(target),
         }),
         [memosByUid],
     );
+
+    // ─── 내부 링크 (글 · 댓글 · 이미지) ───────────────
+    const allByUid = useMemo(() => new Map(memos.map(m => [m.uid, m])), [memos]);
+
+    /** 글 uid → 본문이나 댓글에서 그 글을 링크한 글들 */
+    const refBacklinks = useMemo(() => {
+        const map = new Map<string, Memo[]>();
+        memos.forEach(src => {
+            const uids = new Set([...linkedUids(src.content), ...src.comments.flatMap(c => linkedUids(c.content))]);
+            uids.forEach(uid => {
+                if (uid === src.uid) return;
+                map.set(uid, [...(map.get(uid) ?? []), src]);
+            });
+        });
+        return map;
+    }, [memos]);
+
+    const openRef = useCallback(async (target: RefTarget) => {
+        if (target.type !== 'image') {
+            setImageView(null);
+            setPopup({uids: [target.uid], title: target.type === 'comment' ? '링크된 댓글' : '링크된 글', commentId: target.type === 'comment' ? target.commentId : undefined});
+            return;
+        }
+        const image = await getImage(target.imageId);
+        if (!image) return showToast('이미지를 찾을 수 없습니다');
+        setImageView({entries: [{image, memo: memos.find(m => m.imageIds.includes(target.imageId))}], index: 0});
+    }, [memos]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const refApi = useMemo<MemoLinkApi>(
+        () => ({all: memos.filter(m => !m.isSealed), byUid: allByUid, open: openRef, showLinkButton: settings.showLinkButton, interactive: true}),
+        [memos, allByUid, openRef, settings.showLinkButton],
+    );
+
+    const copyLink = async (memo: Memo, commentId?: string) => {
+        const comment = commentId ? memo.comments.find(c => c.id === commentId) : undefined;
+        const md = comment
+            ? refMarkdown(commentLabel(memo.title, comment.content), {type: 'comment', uid: memo.uid, commentId: comment.id})
+            : refMarkdown(memo.title, {type: 'memo', uid: memo.uid});
+        const ok = await copyText(md);
+        showToast(ok ? '링크를 복사했습니다. 다른 글이나 댓글에 붙여넣으세요' : '복사하지 못했습니다');
+    };
 
     const linkExisting = async (target: LinkTarget, uid: string) => {
         const todo = memos.find(m => m.id === target.todoId);
@@ -410,12 +517,13 @@ const MemoPage: React.FC = () => {
     const changeTab = (t: Tab) => {
         setTab(t);
         setFolder(null); // 폴더는 탭마다 다르므로 초기화
+        setHiddenView(false);
         setFabOpen(false);
         endSelecting();
     };
 
     const openTodo = (todoId: number) => {
-        setPopupUids(null);
+        setPopup(null);
         changeTab('todos');
         setFocusId(todoId);
     };
@@ -435,7 +543,7 @@ const MemoPage: React.FC = () => {
         setEditor({memo: null, kind: k, preset, folder: !preset && folder ? folder : undefined});
     };
 
-    const renderCard = (memo: Memo, opts: {highlight?: boolean; inList?: boolean} = {}) => (
+    const renderCard = (memo: Memo, opts: {highlight?: boolean; inList?: boolean; focusCommentId?: string} = {}) => (
         <MemoCard
             key={memo.id}
             memo={memo}
@@ -447,9 +555,10 @@ const MemoPage: React.FC = () => {
             selected={memo.id != null && selectedIds.has(memo.id)}
             onToggleSelect={toggleSelect}
             onDragHandleStart={opts.inList && canManage ? startDrag : undefined}
-            onEdit={m => setEditor({memo: m, kind: m.kind})}
+            onEdit={m => !m.isSealed && setEditor({memo: m, kind: m.kind})}
             onDelete={handleDelete}
             onMove={m => m.id != null && setMoveTarget({ids: [m.id], current: m.category})}
+            onToggleHidden={m => m.id != null && setHidden([m.id], !m.isHidden)}
             onToggleFavorite={toggleFavorite}
             onAddComment={addComment}
             onEditComment={editComment}
@@ -457,13 +566,18 @@ const MemoPage: React.FC = () => {
             onUpdateContent={updateContent}
             onCopyReport={copyReport}
             backlinks={backlinks.get(memo.uid)}
+            refBacklinks={refBacklinks.get(memo.uid)}
+            focusCommentId={opts.focusCommentId}
+            onCopyLink={copyLink}
+            onToggleLock={toggleLock}
+            onUnlockRequest={() => setVaultDialog({mode: 'unlock'})}
             onOpenTodo={openTodo}
             onTagClick={t => {
-                setPopupUids(null);
+                setPopup(null);
                 setActiveTag(activeTag === t ? null : t);
             }}
             onCategoryClick={c => {
-                setPopupUids(null);
+                setPopup(null);
                 if (memo.kind !== kind && tab !== 'images') changeTab(memo.kind === 'todo' ? 'todos' : 'memos');
                 selectFolder(c);
             }}
@@ -485,7 +599,7 @@ const MemoPage: React.FC = () => {
     /** 사이드바(PC)와 폴더 서랍(모바일)에서 같이 쓰는 폴더 목록 */
     const folderPanel = (
         <div className="space-y-1">
-            <button onClick={() => selectFolder(null)} className={navRow(folder === null && !favoritesOnly)}>
+            <button onClick={() => { selectFolder(null); setHiddenView(false); }} className={navRow(folder === null && !favoritesOnly && !hiddenView)}>
                 <FiList size={15} className="shrink-0 text-gray-400" />
                 <span className="flex-1">전체</span>
                 <span className="text-xs text-gray-500">{scoped.length}</span>
@@ -502,6 +616,20 @@ const MemoPage: React.FC = () => {
                 <span className="flex-1">즐겨찾기</span>
                 <span className="text-xs text-gray-500">{scoped.filter(m => m.isFavorite).length}</span>
             </button>
+            {(hiddenCount > 0 || hiddenView) && (
+                <button
+                    onClick={() => {
+                        setHiddenView(v => !v);
+                        setDrawerOpen(false);
+                    }}
+                    aria-pressed={hiddenView}
+                    className={navRow(hiddenView)}
+                >
+                    <FiEyeOff size={15} className="shrink-0 text-gray-400" />
+                    <span className="flex-1">숨긴 글</span>
+                    <span className="text-xs text-gray-500">{hiddenCount}</span>
+                </button>
+            )}
             <button
                 onClick={() => selectFolder('')}
                 className={`${navRow(folder === '')} ${dropOver === '' ? 'bg-emerald-900/60 ring-1 ring-emerald-500' : ''}`}
@@ -539,9 +667,10 @@ const MemoPage: React.FC = () => {
         </div>
     );
 
-    const emptyFolder = folder && !favoritesOnly && !activeTag && !query.trim();
+    const emptyFolder = folder && !favoritesOnly && !hiddenView && !activeTag && !query.trim();
 
     return (
+        <MemoLinkContext.Provider value={refApi}>
         <TaskLinkContext.Provider value={linkApi}>
         <div className="min-h-[100dvh] bg-gray-900 text-gray-200">
             {/* 상단: 탭 · 검색 · 필터 · 정렬 */}
@@ -577,6 +706,16 @@ const MemoPage: React.FC = () => {
                                 </button>
                             )}
                         </label>
+                        {hasVault && (
+                            <button
+                                onClick={() => (unlocked ? lockVault() : setVaultDialog({mode: 'unlock'}))}
+                                aria-label={unlocked ? '지금 잠그기' : '잠금 풀기'}
+                                title={unlocked ? '잠금 풀림 — 누르면 바로 잠급니다' : '잠긴 글이 있습니다 — 눌러서 풀기'}
+                                className={`order-2 rounded-full p-2 hover:bg-gray-800 lg:order-3 ${unlocked ? 'text-violet-300' : 'text-gray-400'}`}
+                            >
+                                {unlocked ? <FiUnlock size={19} /> : <FiLock size={19} />}
+                            </button>
+                        )}
                         <Link to="/memo/settings" aria-label="설정" title="설정" className="order-2 -mr-2 rounded-full p-2 text-gray-300 hover:bg-gray-800 lg:order-3">
                             <FiSettings size={20} />
                         </Link>
@@ -584,12 +723,17 @@ const MemoPage: React.FC = () => {
 
                     {/* 모바일: 전체 · 즐겨찾기 · 폴더 (PC는 왼쪽 사이드바) */}
                     <div className="-mx-4 flex gap-1.5 overflow-x-auto px-4 [scrollbar-width:none] lg:hidden [&::-webkit-scrollbar]:hidden">
-                        <button onClick={() => { setFolder(null); setFavoritesOnly(false); }} className={chip(folder === null && !favoritesOnly)}>
-                            전체 {scoped.length}
+                        <button onClick={() => { setFolder(null); setFavoritesOnly(false); setHiddenView(false); }} className={chip(folder === null && !favoritesOnly && !hiddenView)}>
+                            전체 {scopedAll.length - hiddenCount}
                         </button>
                         <button onClick={() => setFavoritesOnly(v => !v)} className={chip(favoritesOnly)}>
                             <FiStar className={favoritesOnly ? 'text-amber-500' : 'text-amber-400'} fill="currentColor" size={14} /> 즐겨찾기
                         </button>
+                        {(hiddenCount > 0 || hiddenView) && (
+                            <button onClick={() => setHiddenView(v => !v)} className={chip(hiddenView)}>
+                                <FiEyeOff size={14} /> 숨김 {hiddenCount}
+                            </button>
+                        )}
                         <button onClick={() => setDrawerOpen(true)} className={`${chip(folder !== null)} max-w-[55%]`}>
                             <FiFolder size={14} className="shrink-0" />
                             <span className="truncate">{folder === null ? '폴더' : folder === '' ? '폴더 없음' : pathLabel(folder)}</span>
@@ -619,6 +763,7 @@ const MemoPage: React.FC = () => {
                             )}
                             <span className="min-w-0 flex-1 truncate text-gray-500">
                                 <span className="hidden lg:inline">
+                                    {hiddenView ? '숨긴 글 · ' : ''}
                                     {favoritesOnly ? '즐겨찾기 · ' : ''}
                                     {folder === null ? '전체' : folder === '' ? '폴더 없음' : pathLabel(folder)} ·{' '}
                                 </span>
@@ -694,7 +839,7 @@ const MemoPage: React.FC = () => {
                         <p className="py-10 text-center text-gray-500">불러오는 중…</p>
                     ) : tab === 'images' ? (
                         <ImageGallery
-                            memos={visible}
+                            memos={visible.filter(m => !m.isSealed)}
                             refreshKey={galleryKey}
                             pageSize={settings.imagePageSize}
                             onOpenMemo={id => {
@@ -705,6 +850,11 @@ const MemoPage: React.FC = () => {
                         />
                     ) : visible.length ? (
                         <>
+                            {hiddenMatches > 0 && (
+                                <button onClick={() => setHiddenView(true)} className="mb-3 flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-200">
+                                    <FiEyeOff size={14} /> 숨긴 글에서 {hiddenMatches}개 더 찾음 · 보기
+                                </button>
+                            )}
                             <div className={`grid items-start ${compact ? 'gap-2' : 'gap-3'} ${!compact && settings.pcColumns === 2 ? 'xl:grid-cols-2' : ''}`}>
                                 {pageItems.map(memo => renderCard(memo, {highlight: focusId === memo.id, inList: true}))}
                             </div>
@@ -729,6 +879,11 @@ const MemoPage: React.FC = () => {
                     ) : hasFilter ? (
                         <div className="py-16 text-center text-sm text-gray-500">
                             조건에 맞는 {tab === 'todos' ? '할일이' : '메모가'} 없습니다.
+                            {hiddenMatches > 0 && (
+                                <button onClick={() => setHiddenView(true)} className="mt-3 block w-full text-gray-300">
+                                    숨긴 글에서 {hiddenMatches}개 찾음 · 보기
+                                </button>
+                            )}
                             <button onClick={clearFilters} className="mt-3 block w-full text-emerald-400">필터 모두 해제</button>
                         </div>
                     ) : (
@@ -768,6 +923,14 @@ const MemoPage: React.FC = () => {
                             className="flex shrink-0 items-center gap-1.5 rounded-lg bg-gray-800 px-2.5 py-1.5 text-gray-100 disabled:opacity-40"
                         >
                             <FiFolder className="hidden sm:block" /> 이동
+                        </button>
+                        <button
+                            onClick={() => setHidden([...selectedIds], !hiddenView)}
+                            disabled={!selectedIds.size}
+                            className="flex shrink-0 items-center gap-1.5 rounded-lg bg-gray-800 px-2.5 py-1.5 text-gray-100 disabled:opacity-40"
+                        >
+                            {hiddenView ? <FiEye className="hidden sm:block" /> : <FiEyeOff className="hidden sm:block" />}
+                            {hiddenView ? '해제' : '숨김'}
                         </button>
                         <button
                             onClick={deleteSelected}
@@ -847,6 +1010,7 @@ const MemoPage: React.FC = () => {
                     folders={foldersFor(editor.kind)}
                     frequentFolders={frequentFoldersFor(editor.kind)}
                     allTags={allTags}
+                    indentKeys={settings.indentKeys}
                     onSave={handleSave}
                     onClose={() => setEditor(null)}
                 />
@@ -864,6 +1028,20 @@ const MemoPage: React.FC = () => {
 
             {folderActions.dialogs}
 
+            {vaultDialog && (
+                <VaultDialog
+                    mode={vaultDialog.mode}
+                    reason={vaultDialog.reason}
+                    onClose={() => setVaultDialog(null)}
+                    onDone={() => {
+                        const then = vaultDialog.then;
+                        setVaultDialog(null);
+                        setHasVault(true);
+                        then?.();
+                    }}
+                />
+            )}
+
             {toast && (
                 <div role="status" className="fixed inset-x-0 bottom-[calc(6rem+env(safe-area-inset-bottom))] z-[70] mx-auto w-fit max-w-[90%] rounded-full bg-gray-100 px-4 py-2 text-sm text-gray-900 shadow-lg">
                     {toast}
@@ -871,26 +1049,43 @@ const MemoPage: React.FC = () => {
             )}
 
             {/* 할일 항목에 연결된 메모 팝업 (편집기는 이 위에 열림) */}
-            {popupUids && (
-                <div className="fixed inset-0 z-[35] flex items-end justify-center bg-black/60 sm:items-center" onClick={() => setPopupUids(null)}>
+            {popup && (
+                <div className="fixed inset-0 z-[35] flex items-end justify-center bg-black/60 sm:items-center" onClick={() => setPopup(null)}>
                     <div
                         role="dialog"
-                        aria-label="연결된 메모"
+                        aria-label={popup.title}
                         onClick={e => e.stopPropagation()}
                         className="flex max-h-[90dvh] w-full flex-col rounded-t-2xl bg-gray-900 sm:max-w-2xl sm:rounded-2xl"
                     >
                         <div className="flex items-center border-b border-gray-800 px-4 py-2">
-                            <h2 className="flex-1 font-semibold text-gray-100">연결된 메모 {popupUids.length > 1 ? popupUids.length : ''}</h2>
-                            <button onClick={() => setPopupUids(null)} aria-label="닫기" className="-mr-2 rounded-full p-2 hover:bg-gray-800">
+                            <h2 className="flex-1 font-semibold text-gray-100">{popup.title} {popup.uids.length > 1 ? popup.uids.length : ''}</h2>
+                            <button onClick={() => setPopup(null)} aria-label="닫기" className="-mr-2 rounded-full p-2 hover:bg-gray-800">
                                 <FiX size={20} />
                             </button>
                         </div>
                         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
-                            {popupUids.map(uid => memosByUid.get(uid)).filter((m): m is Memo => !!m).map(m => renderCard(m))}
-                            {!popupUids.some(uid => memosByUid.has(uid)) && <p className="py-8 text-center text-sm text-gray-500">메모가 삭제되었습니다.</p>}
+                            {popup.uids
+                                .map(uid => allByUid.get(uid))
+                                .filter((m): m is Memo => !!m)
+                                .map(m => renderCard(m, {focusCommentId: popup.commentId}))}
+                            {!popup.uids.some(uid => allByUid.has(uid)) && <p className="py-8 text-center text-sm text-gray-500">글이 삭제되었습니다.</p>}
                         </div>
                     </div>
                 </div>
+            )}
+
+            {imageView && (
+                <ImageViewer
+                    entries={imageView.entries}
+                    index={imageView.index}
+                    onIndex={i => setImageView(v => v && {...v, index: i})}
+                    onClose={() => setImageView(null)}
+                    onOpenMemo={id => {
+                        const m = memos.find(x => x.id === id);
+                        setImageView(null);
+                        if (m) setPopup({uids: [m.uid], title: '이미지가 있는 글'});
+                    }}
+                />
             )}
 
             {picker && (
@@ -908,6 +1103,7 @@ const MemoPage: React.FC = () => {
             )}
         </div>
         </TaskLinkContext.Provider>
+        </MemoLinkContext.Provider>
     );
 };
 

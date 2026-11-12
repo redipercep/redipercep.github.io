@@ -1,15 +1,17 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {Link} from 'react-router-dom';
-import {FiArrowLeft, FiDownload, FiFolderPlus, FiShield, FiUpload} from 'react-icons/fi';
+import {FiArrowLeft, FiDownload, FiFolderPlus, FiLock, FiShield, FiUnlock, FiUpload} from 'react-icons/fi';
 import {useFolderActions} from '../components/FolderActions';
 import FolderTree, {useExpanded} from '../components/FolderTree';
-import {type FolderMap, getAllImages, getAllMemos, getFolderMap, importData} from '../db/memoDB';
+import VaultDialog, {MIN_PASSWORD} from '../components/VaultDialog';
+import {changePassword, type FolderMap, getAllImages, getAllMemos, getFolderMap, getVaultRecords, importData} from '../db/memoDB';
 import type {Memo, MemoImage, MemoKind, SortDir, SortKey} from '../types/memo';
 import {exportBackup, readBackup} from '../utils/backup';
 import {buildTree, collectFolders, countByFolder} from '../utils/folders';
 import {clearImageUrlCache} from '../utils/image';
+import {lockVault, subscribeVault, useAutoLock, useVaultState, type VaultRecord} from '../utils/vault';
 import {
-    COMMENT_PAGE_SIZES, IMAGE_PAGE_SIZES, type ListView, PAGE_SIZES, type Settings, SORT_LABELS, useSettings,
+    AUTO_LOCK_MINUTES, COMMENT_PAGE_SIZES, IMAGE_PAGE_SIZES, type IndentKeys, type ListView, PAGE_SIZES, type Settings, SORT_LABELS, useSettings,
 } from '../utils/settings';
 
 const KINDS: {kind: MemoKind; label: string}[] = [
@@ -68,7 +70,11 @@ const SettingsPage: React.FC = () => {
     const [folderMap, setFolderMap] = useState<FolderMap>({memo: [], todo: []});
     const [folderKind, setFolderKind] = useState<MemoKind>('memo');
     const [storage, setStorage] = useState<{usage: number; quota: number; persisted: boolean} | null>(null);
-    const [pendingImport, setPendingImport] = useState<{memos: Memo[]; images: MemoImage[]; folders: Partial<FolderMap>} | null>(null);
+    const [pendingImport, setPendingImport] = useState<{memos: Memo[]; images: MemoImage[]; folders: Partial<FolderMap>; vaults: VaultRecord[]} | null>(null);
+    const [vaultCount, setVaultCount] = useState(0);
+    const [vaultDialog, setVaultDialog] = useState<'unlock' | 'setup' | null>(null);
+    const [pwForm, setPwForm] = useState<{old: string; next: string; confirm: string; busy: boolean; error: string} | null>(null);
+    const unlocked = useVaultState();
     const [toast, setToast] = useState<string | null>(null);
     const importRef = useRef<HTMLInputElement>(null);
 
@@ -84,16 +90,19 @@ const SettingsPage: React.FC = () => {
     };
 
     const reload = useCallback(async () => {
-        const [list, folders, images] = await Promise.all([getAllMemos(), getFolderMap(), getAllImages()]);
+        const [list, folders, images, vaults] = await Promise.all([getAllMemos(), getFolderMap(), getAllImages(), getVaultRecords()]);
         setMemos(list);
         setFolderMap(folders);
         setImageCount(images.length);
+        setVaultCount(vaults.length);
         loadStorage();
     }, []);
 
     useEffect(() => {
         reload();
     }, [reload]);
+    useEffect(() => subscribeVault(() => reload()), [reload]);
+    useAutoLock(settings.autoLockMinutes, settings.lockOnHide, false);
 
     const set = <K extends keyof Settings>(key: K, value: Settings[K]) => update(s => ({...s, [key]: value}));
 
@@ -128,7 +137,7 @@ const SettingsPage: React.FC = () => {
         if (!pendingImport) return;
         if (mode === 'replace' && !window.confirm('이 기기의 글과 이미지를 모두 지우고 백업으로 교체합니다. 계속할까요?')) return;
         try {
-            await importData(pendingImport.memos, pendingImport.images, mode, pendingImport.folders);
+            await importData(pendingImport.memos, pendingImport.images, mode, pendingImport.folders, pendingImport.vaults);
             clearImageUrlCache();
             await reload();
             showToast(`글 ${pendingImport.memos.length}개를 가져왔습니다`);
@@ -144,8 +153,24 @@ const SettingsPage: React.FC = () => {
         showToast(ok ? '이 기기에서 데이터를 보호하도록 설정했습니다' : '브라우저가 요청을 거절했습니다. 홈 화면에 추가하면 허용되는 경우가 많습니다');
     };
 
+    const submitPasswordChange = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!pwForm || pwForm.busy) return;
+        if (pwForm.next.length < MIN_PASSWORD) return setPwForm({...pwForm, error: `새 비밀번호는 ${MIN_PASSWORD}자 이상`});
+        if (pwForm.next !== pwForm.confirm) return setPwForm({...pwForm, error: '새 비밀번호 두 개가 다릅니다'});
+        setPwForm({...pwForm, busy: true, error: ''});
+        const ok = await changePassword(pwForm.old, pwForm.next).catch(() => false);
+        if (!ok) return setPwForm({...pwForm, busy: false, error: '지금 비밀번호가 맞지 않습니다'});
+        setPwForm(null);
+        await reload();
+        showToast('비밀번호를 바꿨습니다');
+    };
+
+    const lockedCount = memos.filter(m => m.isLocked).length;
+    const foreignSealed = unlocked ? memos.filter(m => m.isSealed).length : 0; // 다른 비밀번호로 잠긴 글
     const memoCount = memos.filter(m => m.kind === 'memo').length;
     const todoCount = memos.length - memoCount;
+    const hiddenCount = memos.filter(m => m.isHidden).length;
 
     return (
         <div className="min-h-[100dvh] bg-gray-900 text-gray-200">
@@ -206,6 +231,34 @@ const SettingsPage: React.FC = () => {
                         ))}
                     </Section>
 
+                    <Section title="편집기" description="Ctrl+S(맥은 Cmd+S)를 누르면 저장하고 계속 편집합니다. 저장 버튼은 저장 후 닫습니다.">
+                        <Row label="들여쓰기 단축키" hint="하위 항목도 함께 움직입니다">
+                            <Segmented<IndentKeys>
+                                label="들여쓰기 단축키"
+                                value={settings.indentKeys}
+                                options={[
+                                    {value: 'both', label: '둘 다'},
+                                    {value: 'ctrl', label: 'Ctrl+←→'},
+                                    {value: 'tab', label: 'Tab'},
+                                    {value: 'off', label: '끄기'},
+                                ]}
+                                onChange={v => set('indentKeys', v)}
+                            />
+                        </Row>
+                        <Row label="'글 연결' 버튼" hint="편집기 도구 막대와 댓글 입력창에 표시. 꺼도 카드 ⋯ 메뉴의 '링크 복사'는 그대로 쓸 수 있습니다">
+                            <Segmented<'on' | 'off'>
+                                label="글 연결 버튼"
+                                value={settings.showLinkButton ? 'on' : 'off'}
+                                options={[{value: 'on', label: '표시'}, {value: 'off', label: '숨김'}]}
+                                onChange={v => set('showLinkButton', v === 'on')}
+                            />
+                        </Row>
+                        <p className="text-xs leading-relaxed text-gray-500">
+                            Ctrl+→ / Ctrl+← 는 목록 줄에서만 동작하고, 일반 문장에서는 원래대로 단어 단위로 이동합니다. 맥에서는 Ctrl+방향키가 데스크톱 전환과 겹칠 수 있습니다.
+                            Tab 방식에서 편집창 밖으로 나가려면 Esc를 누른 뒤 Tab을 누르세요.
+                        </p>
+                    </Section>
+
                     <Section title="페이지">
                         <Row label="한 페이지에 보일 글" hint="메모 · 할일">
                             <Segmented<number> label="한 페이지 글 수" value={settings.pageSize} options={PAGE_SIZES.map(n => ({value: n, label: `${n}`}))} onChange={v => set('pageSize', v)} />
@@ -236,6 +289,78 @@ const SettingsPage: React.FC = () => {
                         )}
                     </Section>
 
+                    <Section
+                        title="비밀번호 잠금"
+                        description="남에게 보이면 안 되는 글을 잠급니다. 잠근 글의 제목·본문·댓글·태그·이미지는 암호화되어 저장되고, 백업 파일에도 암호화된 채로 들어갑니다. 글의 ⋯ 메뉴에서 '비밀번호로 잠그기'를 고르세요."
+                    >
+                        {!vaultCount ? (
+                            <button onClick={() => setVaultDialog('setup')} className="flex items-center gap-2 rounded-lg bg-violet-700/80 px-3 py-2 text-sm font-medium text-white hover:bg-violet-600">
+                                <FiLock /> 비밀번호 정하기
+                            </button>
+                        ) : (
+                            <>
+                                <Row label="상태" hint={`잠근 글 ${lockedCount}개`}>
+                                    {unlocked ? (
+                                        <button onClick={lockVault} className="flex items-center gap-1.5 rounded-lg bg-gray-700 px-3 py-1.5 text-sm hover:bg-gray-600">
+                                            <FiUnlock className="text-violet-300" /> 풀림 · 지금 잠그기
+                                        </button>
+                                    ) : (
+                                        <button onClick={() => setVaultDialog('unlock')} className="flex items-center gap-1.5 rounded-lg bg-violet-700/80 px-3 py-1.5 text-sm text-white hover:bg-violet-600">
+                                            <FiLock /> 잠김 · 풀기
+                                        </button>
+                                    )}
+                                </Row>
+                                {foreignSealed > 0 && (
+                                    <p className="text-xs text-amber-300">다른 비밀번호로 잠긴 글이 {foreignSealed}개 있습니다 (다른 기기에서 가져온 백업 등). 그 비밀번호로 풀면 함께 열립니다.</p>
+                                )}
+                                <Row label="자동 잠금" hint="조작이 없으면 잠급니다. 글을 편집하는 동안에는 잠그지 않습니다">
+                                    <Segmented<number>
+                                        label="자동 잠금"
+                                        value={settings.autoLockMinutes}
+                                        options={AUTO_LOCK_MINUTES.map(n => ({value: n, label: n ? `${n}분` : '끄기'}))}
+                                        onChange={v => set('autoLockMinutes', v)}
+                                    />
+                                </Row>
+                                <Row label="다른 앱·탭으로 가면 바로 잠그기">
+                                    <Segmented<'on' | 'off'>
+                                        label="벗어나면 잠그기"
+                                        value={settings.lockOnHide ? 'on' : 'off'}
+                                        options={[{value: 'on', label: '켜기'}, {value: 'off', label: '끄기'}]}
+                                        onChange={v => set('lockOnHide', v === 'on')}
+                                    />
+                                </Row>
+                                {pwForm ? (
+                                    <form onSubmit={submitPasswordChange} className="space-y-2 rounded-lg bg-gray-900/60 p-3">
+                                        {(['old', 'next', 'confirm'] as const).map(k => (
+                                            <input
+                                                key={k}
+                                                type="password"
+                                                autoComplete={k === 'old' ? 'current-password' : 'new-password'}
+                                                value={pwForm[k]}
+                                                onChange={e => setPwForm({...pwForm, [k]: e.target.value, error: ''})}
+                                                placeholder={k === 'old' ? '지금 비밀번호' : k === 'next' ? `새 비밀번호 (${MIN_PASSWORD}자 이상)` : '새 비밀번호 한 번 더'}
+                                                aria-label={k === 'old' ? '지금 비밀번호' : k === 'next' ? '새 비밀번호' : '새 비밀번호 확인'}
+                                                className="w-full rounded-lg bg-gray-800 px-3 py-2 text-base outline-none focus:ring-2 focus:ring-violet-500 sm:text-sm"
+                                            />
+                                        ))}
+                                        {pwForm.error && <p role="alert" className="text-sm text-red-400">{pwForm.error}</p>}
+                                        <div className="flex justify-end gap-2 text-sm">
+                                            <button type="button" onClick={() => setPwForm(null)} className="rounded-lg px-3 py-1.5 text-gray-400 hover:bg-gray-800">취소</button>
+                                            <button type="submit" disabled={pwForm.busy || !pwForm.old || !pwForm.next} className="rounded-lg bg-violet-600 px-3 py-1.5 font-medium text-white disabled:opacity-40">
+                                                {pwForm.busy ? '바꾸는 중…' : '바꾸기'}
+                                            </button>
+                                        </div>
+                                        <p className="text-xs text-gray-500">잠근 글과 이미지를 모두 새 비밀번호로 다시 암호화합니다.</p>
+                                    </form>
+                                ) : (
+                                    <button onClick={() => setPwForm({old: '', next: '', confirm: '', busy: false, error: ''})} className="text-sm text-violet-300 hover:underline">
+                                        비밀번호 바꾸기
+                                    </button>
+                                )}
+                            </>
+                        )}
+                    </Section>
+
                     <Section title="백업" description="다른 기기로 옮길 때 사용합니다. 글, 댓글, 이미지, 폴더가 한 파일에 담깁니다.">
                         <div className="grid grid-cols-2 gap-2">
                             <button onClick={handleExport} className="flex items-center justify-center gap-2 rounded-lg bg-gray-700 px-3 py-2.5 text-sm hover:bg-gray-600">
@@ -248,7 +373,7 @@ const SettingsPage: React.FC = () => {
                     </Section>
 
                     <Section title="저장 공간">
-                        <Row label="저장된 데이터" hint={`메모 ${memoCount} · 할일 ${todoCount} · 이미지 ${imageCount}`}>
+                        <Row label="저장된 데이터" hint={`메모 ${memoCount} · 할일 ${todoCount} · 이미지 ${imageCount}${hiddenCount ? ` · 숨긴 글 ${hiddenCount}` : ''}`}>
                             {storage && <span className="text-sm text-gray-400">{formatBytes(storage.usage)} 사용</span>}
                         </Row>
                         {storage && (
@@ -273,6 +398,17 @@ const SettingsPage: React.FC = () => {
 
             <input ref={importRef} type="file" accept="application/json,.json" hidden onChange={e => handleImportFile(e.target.files?.[0])} />
             {folderActions.dialogs}
+            {vaultDialog && (
+                <VaultDialog
+                    mode={vaultDialog}
+                    onClose={() => setVaultDialog(null)}
+                    onDone={() => {
+                        setVaultDialog(null);
+                        reload();
+                        if (vaultDialog === 'setup') showToast('비밀번호를 정했습니다. 글의 ⋯ 메뉴에서 잠글 수 있습니다');
+                    }}
+                />
+            )}
 
             {pendingImport && (
                 <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 sm:items-center" onClick={() => setPendingImport(null)}>
