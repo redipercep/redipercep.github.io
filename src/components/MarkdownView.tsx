@@ -110,7 +110,7 @@ const components: Components = {
     ),
     table: ({node: _n, ...p}) => (
         <div className="my-2 overflow-x-auto">
-            <table className="min-w-full border-collapse text-sm" {...p} />
+            <table className="min-w-full border-collapse text-sm [overflow-wrap:normal] [word-break:keep-all]" {...p} />
         </div>
     ),
     th: ({node: _n, ...p}) => <th className="border border-gray-600 bg-gray-700/50 px-2 py-1 text-left" {...p} />,
@@ -120,7 +120,7 @@ const components: Components = {
 };
 
 const MarkdownView: React.FC<{content: string}> = ({content}) => (
-    <div className="break-words text-[15px] text-gray-300">
+    <div className="min-w-0 text-[15px] text-gray-300 [overflow-wrap:anywhere]">
         <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={urlTransform} components={components}>
             {content}
         </ReactMarkdown>
@@ -131,7 +131,7 @@ const MarkdownView: React.FC<{content: string}> = ({content}) => (
 const inlineComponents: Components = {...components, p: ({children}) => <>{children}</>};
 
 export const InlineMarkdown: React.FC<{content: string}> = React.memo(({content}) => (
-    <span className="break-words">
+    <span className="[overflow-wrap:anywhere]">
         <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={urlTransform} components={inlineComponents}>
             {content}
         </ReactMarkdown>

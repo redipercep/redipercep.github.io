@@ -138,7 +138,7 @@ const MemoCard: React.FC<Props> = ({
             className="flex min-w-0 flex-1 items-start gap-2 text-left"
         >
             {!selectable && <FiChevronRight size={18} className={`mt-0.5 shrink-0 text-gray-500 transition-transform ${open ? 'rotate-90' : ''}`} />}
-            <h2 className="min-w-0 flex-1 break-words text-base font-semibold leading-snug text-gray-50">
+            <h2 className="min-w-0 flex-1 [overflow-wrap:anywhere] text-base font-semibold leading-snug text-gray-50">
                 {memo.title}
                 {hiddenBadge}
             </h2>
@@ -278,7 +278,7 @@ const MemoCard: React.FC<Props> = ({
                         <>
                             {categoryButton}
                             <h2
-                                className={`break-words text-base font-semibold leading-snug text-gray-50 ${selectable ? 'cursor-pointer' : ''}`}
+                                className={`[overflow-wrap:anywhere] text-base font-semibold leading-snug text-gray-50 ${selectable ? 'cursor-pointer' : ''}`}
                                 onClick={selectable ? () => onToggleSelect?.(memo) : undefined}
                             >
                                 {memo.title}
@@ -359,7 +359,7 @@ const MemoCard: React.FC<Props> = ({
                         <button
                             key={tag}
                             onClick={() => onTagClick(tag)}
-                            className={`rounded-full px-2 py-0.5 text-sm ${
+                            className={`max-w-full rounded-full px-2 py-0.5 text-left text-sm [overflow-wrap:anywhere] ${
                                 activeTag === tag ? 'bg-indigo-500 text-white' : 'bg-indigo-900/50 text-indigo-200'
                             }`}
                         >

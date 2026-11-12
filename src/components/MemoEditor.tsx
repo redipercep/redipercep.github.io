@@ -582,7 +582,7 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTi
                 )}
                 {view !== 'edit' && (
                     <MemoLinkContext.Provider value={linkApi && {...linkApi, interactive: false}}>
-                    <div className={`min-h-0 flex-1 overflow-y-auto p-3 pb-[calc(1rem+env(safe-area-inset-bottom))] ${view === 'split' ? 'bg-gray-950/40' : ''}`}>
+                    <div className={`min-h-0 min-w-0 flex-1 overflow-y-auto p-3 pb-[calc(1rem+env(safe-area-inset-bottom))] ${view === 'split' ? 'bg-gray-950/40' : ''}`}>
                         {!content.trim() ? <p className="text-sm text-gray-600">작성한 내용이 여기에 보입니다.</p> : isTodo ? <TodoView content={content} /> : <MarkdownView content={content} />}
                         {/* 미리보기의 링크는 눌러도 열지 않는다 (편집 중인 내용을 잃지 않도록) */}
                     </div>

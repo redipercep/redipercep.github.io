@@ -273,7 +273,7 @@ const TodoView: React.FC<Props> = ({content, onChange, owner}) => {
     const memoCount = (t: Task) => existingLinks(t).length;
 
     return (
-        <div className="text-[15px]">
+        <div className="min-w-0 text-[15px] [overflow-wrap:anywhere]">
             {parsed.segments.map((seg, i) =>
                 seg.type === 'md' ? (
                     <MarkdownView key={i} content={seg.text} />
