@@ -173,7 +173,7 @@ const SettingsPage: React.FC = () => {
     const hiddenCount = memos.filter(m => m.isHidden).length;
 
     return (
-        <div className="min-h-[100dvh] bg-gray-900 text-gray-200">
+        <div className="min-h-[100dvh] overflow-x-clip bg-gray-900 text-gray-200">
             <header className="sticky top-0 z-30 border-b border-gray-800 bg-gray-900/95 pt-[env(safe-area-inset-top)] backdrop-blur">
                 <div className="mx-auto flex max-w-5xl items-center gap-2 px-4 py-3 lg:px-6">
                     <Link to="/memo" aria-label="메모로 돌아가기" className="-ml-2 rounded-full p-2 hover:bg-gray-800">

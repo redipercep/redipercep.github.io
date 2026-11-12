@@ -672,7 +672,7 @@ const MemoPage: React.FC = () => {
     return (
         <MemoLinkContext.Provider value={refApi}>
         <TaskLinkContext.Provider value={linkApi}>
-        <div className="min-h-[100dvh] bg-gray-900 text-gray-200">
+        <div className="min-h-[100dvh] overflow-x-clip bg-gray-900 text-gray-200">
             {/* 상단: 탭 · 검색 · 필터 · 정렬 */}
             <header ref={headerRef} className="sticky top-0 z-30 border-b border-gray-800 bg-gray-900/95 pt-[env(safe-area-inset-top)] backdrop-blur">
                 <div className="mx-auto max-w-3xl space-y-2 px-4 py-2 lg:max-w-7xl lg:px-6">
@@ -855,7 +855,7 @@ const MemoPage: React.FC = () => {
                                     <FiEyeOff size={14} /> 숨긴 글에서 {hiddenMatches}개 더 찾음 · 보기
                                 </button>
                             )}
-                            <div className={`grid items-start ${compact ? 'gap-2' : 'gap-3'} ${!compact && settings.pcColumns === 2 ? 'xl:grid-cols-2' : ''}`}>
+                            <div className={`grid grid-cols-1 items-start ${compact ? 'gap-2' : 'gap-3'} ${!compact && settings.pcColumns === 2 ? 'xl:grid-cols-2' : ''}`}>
                                 {pageItems.map(memo => renderCard(memo, {highlight: focusId === memo.id, inList: true}))}
                             </div>
                             {pageCount > 1 && (
