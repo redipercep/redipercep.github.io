@@ -21,3 +21,6 @@
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# 빌드 때 생성되는 Tailwind CSS
+/public/tailwind.css
