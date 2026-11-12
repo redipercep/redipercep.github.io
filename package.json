@@ -25,7 +25,10 @@
     "web-vitals": "^2.1.4"
   },
   "scripts": {
+    "tailwind": "tailwindcss -i ./src/styles/tailwind.css -o ./public/tailwind.css --minify",
+    "prestart": "npm run tailwind",
     "start": "react-scripts start",
+    "prebuild": "npm run tailwind",
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
@@ -51,6 +54,7 @@
     ]
   },
   "devDependencies": {
+    "@tailwindcss/cli": "^4.3.4",
     "@types/react-router-dom": "^5.3.3",
     "gh-pages": "^6.3.0"
   },
