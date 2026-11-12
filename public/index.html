@@ -29,7 +29,8 @@
       Learn how to configure a non-root public URL by running `npm run build`.
     -->
     <title>메모</title>
-    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <!-- Tailwind는 빌드할 때 만들어진다 (외부 CDN 스크립트를 쓰지 않음 — 잠근 글 보호) -->
+    <link rel="stylesheet" href="%PUBLIC_URL%/tailwind.css" />
   </head>
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>
