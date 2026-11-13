@@ -1,4 +1,0 @@
-/* Tailwind 입력 파일 — npm run build / npm start 때 public/tailwind.css 로 만들어진다 (CDN 대신) */
-@import "tailwindcss";
-@source "../../public/index.html";
-@source "../";
