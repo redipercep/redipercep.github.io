@@ -4,6 +4,7 @@ import ReactMarkdown, {defaultUrlTransform, type Components} from 'react-markdow
 import remarkGfm from 'remark-gfm';
 import {IMG_PROTOCOL, useImageUrl} from '../utils/image';
 import {isRefHref, parseRef} from '../utils/links';
+import {useSourceImageUrl} from './ImageSourceContext';
 import RefLink from './RefLink';
 
 // 기본 설정은 알 수 없는 주소를 지우므로 앱 내부 주소(memo:, memo-img:)는 통과시킨다
@@ -11,8 +12,9 @@ const urlTransform = (url: string) => (isRefHref(url) ? url : defaultUrlTransfor
 
 const MemoImg: React.FC<{src?: string; alt?: string}> = ({src, alt}) => {
     const localId = src?.startsWith(IMG_PROTOCOL) ? src.slice(IMG_PROTOCOL.length) : null;
-    const localUrl = useImageUrl(localId);
-    const url = localId ? localUrl : src;
+    const sourced = useSourceImageUrl(localId); // 보관함 미리보기 등 다른 곳에서 읽어야 할 때
+    const localUrl = useImageUrl(sourced.active ? null : localId);
+    const url = localId ? (sourced.active ? sourced.url : localUrl) : src;
 
     if (url === undefined) return <span className="my-2 block h-32 w-full animate-pulse rounded-lg bg-gray-700/60" />;
     if (!url) return <span className="my-2 block rounded-lg bg-gray-700/60 px-3 py-2 text-sm text-gray-400">이미지를 찾을 수 없습니다</span>;
