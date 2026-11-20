@@ -5,10 +5,14 @@ import {
 } from '../utils/vault';
 
 const DB_NAME = 'memo-app';
-const DB_VERSION = 2;
-const MEMOS = 'memos';
-const IMAGES = 'images';
+const DB_VERSION = 3;
+export const MEMOS = 'memos';
+export const IMAGES = 'images';
 const META = 'meta'; // 폴더 목록 등 앱 데이터 (v2)
+// 가져온 글 보관함 (v3) — 지금 쓰는 글과 완전히 다른 저장소라 섞이지 않는다
+export const IMPORT_BATCHES = 'importBatches';
+export const STAGED_MEMOS = 'stagedMemos';
+export const STAGED_IMAGES = 'stagedImages';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -26,6 +30,15 @@ function openDB(): Promise<IDBDatabase> {
                 }
                 if (!db.objectStoreNames.contains(META)) {
                     db.createObjectStore(META, {keyPath: 'key'});
+                }
+                if (!db.objectStoreNames.contains(IMPORT_BATCHES)) {
+                    db.createObjectStore(IMPORT_BATCHES, {keyPath: 'id'});
+                }
+                if (!db.objectStoreNames.contains(STAGED_MEMOS)) {
+                    db.createObjectStore(STAGED_MEMOS, {keyPath: 'key'}).createIndex('batch', 'batchId');
+                }
+                if (!db.objectStoreNames.contains(STAGED_IMAGES)) {
+                    db.createObjectStore(STAGED_IMAGES, {keyPath: 'key'}).createIndex('batch', 'batchId');
                 }
             };
             req.onsuccess = () => {
@@ -47,7 +60,7 @@ function openDB(): Promise<IDBDatabase> {
 }
 
 /** 단일 스토어 작업: 트랜잭션이 완료된 뒤 결과를 돌려준다 */
-async function run<T>(
+export async function run<T>(
     store: string,
     mode: IDBTransactionMode,
     fn: (s: IDBObjectStore) => IDBRequest<T>,
@@ -63,7 +76,7 @@ async function run<T>(
 }
 
 /** 여러 스토어를 한 트랜잭션으로 묶는다 (전부 성공하거나 전부 실패) */
-async function runMulti(stores: string[], fn: (tx: IDBTransaction) => void): Promise<void> {
+export async function runMulti(stores: string[], fn: (tx: IDBTransaction) => void): Promise<void> {
     const db = await openDB();
     return new Promise<void>((resolve, reject) => {
         const tx = db.transaction(stores, 'readwrite');
@@ -75,7 +88,7 @@ async function runMulti(stores: string[], fn: (tx: IDBTransaction) => void): Pro
 }
 
 /** id가 비어 있으면 속성 자체를 지워야 autoIncrement 키가 생성된다 */
-function forPut(memo: Memo): Memo {
+export function forPut(memo: Memo): Memo {
     const copy = {...memo};
     if (copy.id == null) delete copy.id;
     return copy;
@@ -158,6 +171,7 @@ export const deleteMemoWithImages = (memo: Memo) =>
 // ─── 이미지 ────────────────────────────────────────
 export const getImage = (id: string) => run<MemoImage | undefined>(IMAGES, 'readonly', s => s.get(id));
 export const getAllImages = () => run<MemoImage[]>(IMAGES, 'readonly', s => s.getAll());
+export const getImageIds = () => run<IDBValidKey[]>(IMAGES, 'readonly', s => s.getAllKeys()).then(keys => keys.map(String));
 export const addImage = (img: MemoImage) => run<IDBValidKey>(IMAGES, 'readwrite', s => s.put(img));
 
 export const deleteImages = async (ids: string[]) => {
@@ -306,6 +320,15 @@ export const getVaultRecords = () =>
 const getActiveVaultId = () =>
     run<{key: string; value: string} | undefined>(META, 'readonly', s => s.get(ACTIVE_VAULT)).then(r => r?.value ?? null);
 const putMeta = (key: string, value: unknown) => run<IDBValidKey>(META, 'readwrite', s => s.put({key, value}));
+
+/** 다른 기기에서 온 금고(salt·확인값)를 합친다. 이 기기에 금고가 없으면 가져온 것을 기본으로 */
+export async function mergeVaults(vaults: VaultRecord[]) {
+    if (!vaults.length) return;
+    const local = await getVaultRecords();
+    const added = vaults.filter(v => !local.some(l => l.id === v.id));
+    if (added.length) await putMeta(VAULTS, [...local, ...added]);
+    if (!local.length) await putMeta(ACTIVE_VAULT, vaults[vaults.length - 1].id);
+}
 
 /** 처음 비밀번호 정하기 (정한 뒤 바로 열린 상태) */
 export async function setupPassword(password: string) {
