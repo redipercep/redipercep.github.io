@@ -104,6 +104,13 @@ export function setOpened(opened: {id: string; key: CryptoKey}[], active: string
     notify();
 }
 
+/** 열쇠만 추가 (새로 잠글 때 쓰는 금고는 바꾸지 않음) — 가져온 백업의 잠긴 글 미리보기용 */
+export function addKeys(opened: {id: string; key: CryptoKey}[]) {
+    if (!opened.length) return;
+    opened.forEach(o => keys.set(o.id, o.key));
+    notify();
+}
+
 export function lockVault() {
     if (!keys.size) return;
     keys.clear();
