@@ -5,6 +5,7 @@ import {
     FiList, FiLock, FiPlus, FiSearch, FiSettings, FiStar, FiTrash2, FiUnlock, FiX,
 } from 'react-icons/fi';
 import {useFolderActions} from '../components/FolderActions';
+import {countStaged} from '../db/importStore';
 import FolderPicker from '../components/FolderPicker';
 import FolderTree, {dropHandlers, type FolderDnd, MIME_MEMOS, useExpanded} from '../components/FolderTree';
 import ImageGallery, {type ImageEntry, ImageViewer} from '../components/ImageGallery';
@@ -100,6 +101,7 @@ const MemoPage: React.FC = () => {
     const [imageView, setImageView] = useState<{entries: ImageEntry[]; index: number} | null>(null);
     // 비밀번호 잠금
     const [hasVault, setHasVault] = useState(false);
+    const [stagedCount, setStagedCount] = useState(0); // 가져온 글 보관함에 남은 글
     const [vaultDialog, setVaultDialog] = useState<{mode: 'unlock' | 'setup'; reason?: string; then?: () => void} | null>(null);
     const unlocked = useVaultState();
     const [picker, setPicker] = useState<LinkTarget | null>(null);
@@ -118,6 +120,7 @@ const MemoPage: React.FC = () => {
         setMemos(list);
         setFolderMap(folders);
         setHasVault(vaults.length > 0);
+        countStaged().then(setStagedCount).catch(() => setStagedCount(0));
         setGalleryKey(k => k + 1);
         setLoading(false);
     }, []);
@@ -660,6 +663,13 @@ const MemoPage: React.FC = () => {
                 />
             ) : (
                 <p className="px-2 text-sm text-gray-500">폴더가 없습니다.{canManage && ' + 버튼으로 만들어 보세요.'}</p>
+            )}
+            {stagedCount > 0 && (
+                <Link to="/memo/imports" className="mt-4 flex items-center gap-2 rounded-lg bg-emerald-950/50 px-2 py-2 text-sm text-emerald-200 hover:bg-emerald-950">
+                    <FiInbox size={15} className="shrink-0" />
+                    <span className="flex-1">가져온 글 보관함</span>
+                    <span className="text-xs text-emerald-300/80">{stagedCount}</span>
+                </Link>
             )}
             {canManage && tree.length > 0 && (
                 <p className="hidden px-2 pt-2 text-xs leading-relaxed text-gray-600 lg:block">글의 ⠿ 손잡이를 끌어 폴더에 놓으면 이동합니다. 폴더끼리도 끌어서 옮길 수 있습니다.</p>

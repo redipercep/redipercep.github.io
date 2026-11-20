@@ -1,9 +1,10 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {Link} from 'react-router-dom';
-import {FiArrowLeft, FiDownload, FiFolderPlus, FiLock, FiShield, FiUnlock, FiUpload} from 'react-icons/fi';
+import {Link, useNavigate} from 'react-router-dom';
+import {FiArrowLeft, FiDownload, FiFolderPlus, FiInbox, FiLock, FiShield, FiUnlock, FiUpload} from 'react-icons/fi';
 import {useFolderActions} from '../components/FolderActions';
 import FolderTree, {useExpanded} from '../components/FolderTree';
 import VaultDialog, {MIN_PASSWORD} from '../components/VaultDialog';
+import {countStaged, stageBackup} from '../db/importStore';
 import {changePassword, type FolderMap, getAllImages, getAllMemos, getFolderMap, getVaultRecords, importData} from '../db/memoDB';
 import type {Memo, MemoImage, MemoKind, SortDir, SortKey} from '../types/memo';
 import {exportBackup, readBackup} from '../utils/backup';
@@ -70,7 +71,9 @@ const SettingsPage: React.FC = () => {
     const [folderMap, setFolderMap] = useState<FolderMap>({memo: [], todo: []});
     const [folderKind, setFolderKind] = useState<MemoKind>('memo');
     const [storage, setStorage] = useState<{usage: number; quota: number; persisted: boolean} | null>(null);
-    const [pendingImport, setPendingImport] = useState<{memos: Memo[]; images: MemoImage[]; folders: Partial<FolderMap>; vaults: VaultRecord[]} | null>(null);
+    const [pendingImport, setPendingImport] = useState<{memos: Memo[]; images: MemoImage[]; folders: Partial<FolderMap>; vaults: VaultRecord[]; fileName: string} | null>(null);
+    const [stagedCount, setStagedCount] = useState(0);
+    const navigate = useNavigate();
     const [vaultCount, setVaultCount] = useState(0);
     const [vaultDialog, setVaultDialog] = useState<'unlock' | 'setup' | null>(null);
     const [pwForm, setPwForm] = useState<{old: string; next: string; confirm: string; busy: boolean; error: string} | null>(null);
@@ -95,6 +98,7 @@ const SettingsPage: React.FC = () => {
         setFolderMap(folders);
         setImageCount(images.length);
         setVaultCount(vaults.length);
+        countStaged().then(setStagedCount).catch(() => setStagedCount(0));
         loadStorage();
     }, []);
 
@@ -127,7 +131,7 @@ const SettingsPage: React.FC = () => {
         if (importRef.current) importRef.current.value = '';
         if (!file) return;
         try {
-            setPendingImport(await readBackup(file));
+            setPendingImport({...(await readBackup(file)), fileName: file.name});
         } catch (e) {
             showToast(e instanceof Error ? e.message : '파일을 읽지 못했습니다');
         }
@@ -145,6 +149,19 @@ const SettingsPage: React.FC = () => {
             showToast('가져오기에 실패했습니다. 저장 공간을 확인하세요');
         }
         setPendingImport(null);
+    };
+
+    /** 따로 보관: 지금 글은 건드리지 않고 보관함에 묶음으로 넣는다 */
+    const stageImport = async () => {
+        if (!pendingImport) return;
+        try {
+            const {fileName, ...parsed} = pendingImport;
+            const b = await stageBackup(parsed, fileName);
+            setPendingImport(null);
+            navigate(`/memo/imports?batch=${encodeURIComponent(b.id)}`);
+        } catch {
+            showToast('보관하지 못했습니다. 저장 공간을 확인하세요');
+        }
     };
 
     const requestPersist = async () => {
@@ -370,6 +387,10 @@ const SettingsPage: React.FC = () => {
                                 <FiUpload /> 가져오기
                             </button>
                         </div>
+                        <Link to="/memo/imports" className="flex items-center justify-between rounded-lg bg-gray-900/60 px-3 py-2.5 text-sm hover:bg-gray-900">
+                            <span className="flex items-center gap-2 text-gray-200"><FiInbox /> 가져온 글 보관함</span>
+                            <span className="text-gray-500">{stagedCount ? `${stagedCount}개 대기 중` : '비어 있음'} ›</span>
+                        </Link>
                     </Section>
 
                     <Section title="저장 공간">
@@ -423,9 +444,13 @@ const SettingsPage: React.FC = () => {
                             글 {pendingImport.memos.length}개, 이미지 {pendingImport.images.length}개가 들어 있습니다.
                         </p>
                         <div className="mt-4 space-y-2">
-                            <button onClick={() => runImport('merge')} className="w-full rounded-xl bg-emerald-600 px-4 py-3 text-left text-white">
-                                <div className="font-semibold">합치기</div>
-                                <div className="text-sm text-emerald-100">기존 글은 유지하고, 같은 글은 최근 수정본으로 맞춥니다</div>
+                            <button onClick={stageImport} className="w-full rounded-xl bg-emerald-600 px-4 py-3 text-left text-white">
+                                <div className="font-semibold">따로 보관 (추천)</div>
+                                <div className="text-sm text-emerald-100">지금 글은 그대로 두고 보관함에 넣습니다. 확인한 뒤 골라서 가져옵니다</div>
+                            </button>
+                            <button onClick={() => runImport('merge')} className="w-full rounded-xl bg-gray-800 px-4 py-3 text-left">
+                                <div className="font-semibold text-gray-100">바로 합치기</div>
+                                <div className="text-sm text-gray-400">기존 글은 유지하고, 같은 글은 최근 수정본으로 맞춥니다</div>
                             </button>
                             <button onClick={() => runImport('replace')} className="w-full rounded-xl bg-gray-800 px-4 py-3 text-left">
                                 <div className="font-semibold text-red-300">모두 교체</div>
