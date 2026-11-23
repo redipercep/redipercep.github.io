@@ -1,11 +1,10 @@
-import React, {useContext, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
-import {FiEdit2, FiLink, FiLink2, FiSend, FiTrash2} from 'react-icons/fi';
+import React, {useEffect, useMemo, useState} from 'react';
+import {FiEdit2, FiLink, FiSend, FiTrash2} from 'react-icons/fi';
 import type {MemoComment} from '../types/memo';
 import {formatDate} from '../utils/format';
+import CommentInput from './CommentInput';
 import MarkdownView from './MarkdownView';
-import {MemoLinkContext} from './MemoLinkContext';
 import Pager from './Pager';
-import RefPicker from './RefPicker';
 
 interface Props {
     comments: MemoComment[];
@@ -18,26 +17,7 @@ interface Props {
     onCopyLink?: (commentId: string) => void;
 }
 
-/** 내용에 맞춰 높이가 늘어나는 입력창 */
-const AutoTextarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttributes<HTMLTextAreaElement>>((props, outer) => {
-    const ref = useRef<HTMLTextAreaElement>(null);
-    React.useImperativeHandle(outer, () => ref.current as HTMLTextAreaElement);
-    useLayoutEffect(() => {
-        const el = ref.current;
-        if (!el) return;
-        el.style.height = 'auto';
-        el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
-    }, [props.value]);
-    return <textarea ref={ref} rows={1} {...props} />;
-});
-
-const inputClass =
-    'min-w-0 flex-1 resize-none rounded-lg bg-gray-900 px-3 py-2 text-base leading-relaxed text-gray-200 outline-none placeholder:text-gray-500 focus:ring-2 focus:ring-emerald-500 sm:text-sm';
-
 const MemoComments: React.FC<Props> = ({comments, onAdd, onEdit, onDelete, pageSize: PAGE_SIZE = 5, focusId, ownerUid, onCopyLink}) => {
-    const linkApi = useContext(MemoLinkContext);
-    const [picking, setPicking] = useState(false);
-    const draftRef = useRef<HTMLTextAreaElement>(null);
     // 최신 댓글이 위로
     const sorted = useMemo(() => [...comments].sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [comments]);
     const [paging, setPaging] = useState(false); // 더보기를 눌러 페이지 이동 중
@@ -58,21 +38,6 @@ const MemoComments: React.FC<Props> = ({comments, onAdd, onEdit, onDelete, pageS
         const t = setTimeout(() => document.getElementById(`comment-${focusId}`)?.scrollIntoView({behavior: 'smooth', block: 'center'}), 80);
         return () => clearTimeout(t);
     }, [focusId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-    /** 글 연결: 입력 중인 댓글의 커서 위치에 링크를 넣는다 */
-    const insertLink = (md: string) => {
-        setPicking(false);
-        const el = draftRef.current;
-        const pos = el?.selectionStart ?? draft.length;
-        const end = el?.selectionEnd ?? pos;
-        const pad = pos > 0 && !/\s$/.test(draft.slice(0, pos)) ? ' ' : '';
-        setDraft(draft.slice(0, pos) + pad + md + ' ' + draft.slice(end));
-        requestAnimationFrame(() => {
-            const at = pos + pad.length + md.length + 1;
-            draftRef.current?.focus();
-            draftRef.current?.setSelectionRange(at, at);
-        });
-    };
 
     const [draft, setDraft] = useState('');
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -98,55 +63,38 @@ const MemoComments: React.FC<Props> = ({comments, onAdd, onEdit, onDelete, pageS
         setBusy(false);
     };
 
-    // PC에서는 Ctrl/Cmd + Enter로 등록, 모바일에서는 버튼으로 등록
-    const submitOnShortcut = (fn: () => void) => (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-            e.preventDefault();
-            fn();
-        }
-    };
-
     return (
         <div className="mt-2 space-y-2">
-            <div className="flex items-end gap-2">
-                {linkApi?.showLinkButton && (
+            <CommentInput
+                value={draft}
+                onChange={setDraft}
+                onSubmit={submit}
+                placeholder={comments.length ? '댓글 추가' : '진행 상황이나 덧붙일 생각을 남겨 보세요'}
+                label="댓글 입력"
+                ownerUid={ownerUid}
+                trailing={
                     <button
-                        onClick={() => setPicking(true)}
-                        aria-label="글 연결"
-                        title="다른 글 · 댓글 · 이미지 연결"
-                        className="shrink-0 rounded-lg p-2.5 text-gray-400 hover:bg-gray-700 hover:text-gray-200"
+                        onClick={submit}
+                        disabled={!draft.trim() || busy}
+                        aria-label="댓글 등록"
+                        className="shrink-0 rounded-lg bg-emerald-600 p-2.5 text-white disabled:opacity-40"
                     >
-                        <FiLink2 size={18} />
+                        <FiSend size={18} />
                     </button>
-                )}
-                <AutoTextarea
-                    ref={draftRef}
-                    value={draft}
-                    onChange={e => setDraft(e.target.value)}
-                    onKeyDown={submitOnShortcut(submit)}
-                    placeholder={comments.length ? '댓글 추가' : '진행 상황이나 덧붙일 생각을 남겨 보세요'}
-                    aria-label="댓글 입력"
-                    className={inputClass}
-                />
-                <button
-                    onClick={submit}
-                    disabled={!draft.trim() || busy}
-                    aria-label="댓글 등록"
-                    className="shrink-0 rounded-lg bg-emerald-600 p-2.5 text-white disabled:opacity-40"
-                >
-                    <FiSend size={18} />
-                </button>
-            </div>
+                }
+            />
 
             {shown.map(c =>
                 editingId === c.id ? (
                     <div key={c.id} className="space-y-2 rounded-lg bg-gray-900/60 p-2">
-                        <AutoTextarea
+                        <CommentInput
                             value={editDraft}
-                            onChange={e => setEditDraft(e.target.value)}
-                            onKeyDown={submitOnShortcut(saveEdit)}
+                            onChange={setEditDraft}
+                            onSubmit={saveEdit}
+                            label="댓글 수정"
                             autoFocus
-                            className={`${inputClass} w-full`}
+                            alwaysShowTools
+                            ownerUid={ownerUid}
                         />
                         <div className="flex justify-end gap-2 text-sm">
                             <button onClick={() => setEditingId(null)} className="rounded-lg px-3 py-1.5 text-gray-400 hover:bg-gray-700">
@@ -229,7 +177,6 @@ const MemoComments: React.FC<Props> = ({comments, onAdd, onEdit, onDelete, pageS
                     <Pager label="댓글 페이지" page={current} count={pageCount} onPage={setPage} />
                 </div>
             )}
-            {picking && <RefPicker excludeUid={ownerUid} onPick={insertLink} onClose={() => setPicking(false)} />}
         </div>
     );
 };

@@ -117,7 +117,12 @@ const MemoEditor: React.FC<Props> = ({memo, kind, preset, latestDaily, initialTi
     /** 본문을 바꾼다. 편집창이 보이면 브라우저 입력으로 넣어 Ctrl+Z 되돌리기가 유지되게 한다 */
     const replaceContent = (next: string, selStart?: number, selEnd?: number) => {
         const el = textareaRef.current;
-        if (!el || !replaceWithUndo(el, next)) setContent(next);
+        if (el && replaceWithUndo(el, next)) {
+            // 바로 커서를 맞춘다 (한 박자 늦으면 빠르게 이어 친 글자가 엉뚱한 자리에 들어감)
+            if (selStart !== undefined) el.setSelectionRange(selStart, selEnd ?? selStart);
+            return;
+        }
+        setContent(next);
         if (selStart === undefined) return;
         requestAnimationFrame(() => {
             const t = textareaRef.current;
