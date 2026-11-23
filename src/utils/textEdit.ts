@@ -137,3 +137,82 @@ export function replaceWithUndo(el: HTMLTextAreaElement, next: string): boolean 
         return false;
     }
 }
+
+const BULLET = /^([ \t]*)([-*+])[ \t]+(?!\[[ xX/-]\][ \t])/;
+const TASK = /^([ \t]*)[-*+][ \t]+\[[ xX/-]\][ \t]*/;
+
+/**
+ * 선택한 줄(커서가 있는 줄)을 목록(- ) / 체크리스트(- [ ] )로 바꾼다.
+ * 이미 모두 그 형태면 기호를 떼어 되돌린다.
+ */
+export function toggleListPrefix(text: string, selStart: number, selEnd: number, kind: 'bullet' | 'task'): EditResult {
+    const lines = text.split('\n');
+    const starts = lineStarts(lines);
+    const a = lineAt(starts, selStart);
+    let b = lineAt(starts, selEnd);
+    if (selEnd > selStart && selEnd === starts[b] && b > a) b--;
+
+    const range = Array.from({length: b - a + 1}, (_, i) => a + i);
+    const filled = range.filter(i => lines[i].trim());
+    const target = kind === 'task' ? TASK : BULLET;
+    const allHave = filled.length > 0 && filled.every(i => target.test(lines[i]));
+
+    // 줄마다 바뀐 위치(at)와 길이 변화(d)를 기록해 커서를 맞춘다
+    const delta = new Map<number, {at: number; d: number}>();
+    (filled.length ? filled : range).forEach(i => {
+        const line = lines[i];
+        const indent = /^[ \t]*/.exec(line)?.[0] ?? '';
+        if (allHave) {
+            const m = target.exec(line);
+            if (!m) return;
+            const cut = kind === 'task' ? m[0].length - indent.length : m[0].length - m[1].length;
+            lines[i] = indent + line.slice(indent.length + cut);
+            delta.set(i, {at: indent.length, d: -cut});
+            return;
+        }
+        if (target.test(line)) return;
+        let ins: string;
+        let at = indent.length;
+        if (kind === 'task' && BULLET.test(line)) {
+            // "- 내용" → "- [ ] 내용"
+            at = (/^[ \t]*[-*+][ \t]+/.exec(line)?.[0] ?? '').length;
+            ins = '[ ] ';
+        } else {
+            ins = kind === 'task' ? '- [ ] ' : '- ';
+        }
+        lines[i] = line.slice(0, at) + ins + line.slice(at);
+        delta.set(i, {at, d: ins.length});
+    });
+
+    const next = lineStarts(lines);
+    const map = (pos: number) => {
+        const i = lineAt(starts, pos);
+        const col = pos - starts[i];
+        const c = delta.get(i);
+        const moved = !c ? col : c.d > 0 ? (col >= c.at ? col + c.d : col) : col > c.at ? Math.max(c.at, col + c.d) : col;
+        return next[i] + Math.min(lines[i].length, moved);
+    };
+    return {text: lines.join('\n'), selStart: map(selStart), selEnd: map(selEnd)};
+}
+
+/**
+ * 목록 줄에서 줄바꿈하면 같은 들여쓰기·기호로 다음 항목을 잇는다.
+ * 내용 없는 항목에서 누르면 목록을 끝낸다. 목록 줄이 아니면 null (평소처럼 줄바꿈)
+ */
+export function continueList(text: string, pos: number): EditResult | null {
+    const ls = text.lastIndexOf('\n', pos - 1) + 1;
+    const before = text.slice(ls, pos);
+    const m = /^([ \t]*)(?:([-*+])|(\d+)([.)]))[ \t]+(\[[ xX/-]\][ \t]*)?/.exec(before);
+    if (!m) return null;
+    if (!before.slice(m[0].length).trim()) return {text: text.slice(0, ls) + text.slice(pos), selStart: ls, selEnd: ls};
+    const bullet = m[3] ? `${Number(m[3]) + 1}${m[4]}` : m[2];
+    const snippet = `\n${m[1]}${bullet} ${m[5] ? '[ ] ' : ''}`;
+    return {text: text.slice(0, pos) + snippet + text.slice(pos), selStart: pos + snippet.length, selEnd: pos + snippet.length};
+}
+
+/** 커서 자리에 끼워 넣기 (앞 글자와 붙지 않게 띄어쓰기) */
+export function insertInline(text: string, selStart: number, selEnd: number, snippet: string): EditResult {
+    const pad = selStart > 0 && !/\s$/.test(text.slice(0, selStart)) ? ' ' : '';
+    const at = selStart + pad.length + snippet.length;
+    return {text: text.slice(0, selStart) + pad + snippet + text.slice(selEnd), selStart: at, selEnd: at};
+}
